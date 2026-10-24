@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import yfinance as yf
 
 from clearsift.data.models import CompanyFinancials
@@ -26,7 +28,9 @@ def fetch_financials(ticker: str) -> CompanyFinancials:
     kwargs: dict[str, object] = {}
     for attr, key in _FIELD_MAP.items():
         raw = info.get(key)
-        kwargs[attr] = float(raw) if isinstance(raw, (int, float)) else None
+        # bool is a subclass of int, so exclude it; NaN and infinity count as missing
+        is_number = isinstance(raw, (int, float)) and not isinstance(raw, bool)
+        kwargs[attr] = float(raw) if is_number and math.isfinite(raw) else None
 
     # sector and industry are strings, not floats — fix those two
     kwargs["sector"] = info.get("sector") or None
