@@ -1,0 +1,7 @@
+# Use LF line endings everywhere, so Windows and CI match.
+* text=auto eol=lf
+
+# Windows scripts keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
