@@ -6,7 +6,7 @@ import yfinance as yf
 
 from clearsift.data.models import CompanyFinancials
 
-# Maps CompanyFinancials field names to yfinance .info keys
+# yfinance uses its own key names, so map them to ours
 _FIELD_MAP: dict[str, str] = {
     "sector": "sector",
     "industry": "industry",
@@ -18,21 +18,23 @@ _FIELD_MAP: dict[str, str] = {
 
 
 def fetch_financials(ticker: str) -> CompanyFinancials:
-    """Fetch financial fields from yfinance. Any missing field is None, never raises."""
+    """Get a company's financials from yfinance, with anything missing set to None."""
     info: dict = {}
     try:
         info = yf.Ticker(ticker).info or {}
     except Exception:
+        # fail closed: if yfinance falls over, everything counts as missing
         pass
 
     kwargs: dict[str, object] = {}
     for attr, key in _FIELD_MAP.items():
         raw = info.get(key)
-        # bool is a subclass of int, so exclude it; NaN and infinity count as missing
+        # yfinance sometimes gives NaN or inf instead of nothing, so treat it as missing.
+        # Python counts True and False as numbers, so skip those too
         is_number = isinstance(raw, (int, float)) and not isinstance(raw, bool)
         kwargs[attr] = float(raw) if is_number and math.isfinite(raw) else None
 
-    # sector and industry are strings, not floats — fix those two
+    # sector and industry are text, so the loop above wrongly set them to None
     kwargs["sector"] = info.get("sector") or None
     kwargs["industry"] = info.get("industry") or None
 

@@ -79,6 +79,15 @@ def test_nan_and_infinity_become_none() -> None:
     assert cf.total_debt is None
 
 
+def test_booleans_become_none() -> None:
+    info = {"marketCap": True, "totalDebt": False}
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=_mock_ticker(info)):
+        cf = fetch_financials("BOOL")
+
+    assert cf.market_cap is None
+    assert cf.total_debt is None
+
+
 def test_fetched_at_is_set() -> None:
     from datetime import UTC, datetime
 
