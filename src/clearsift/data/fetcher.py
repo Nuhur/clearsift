@@ -112,13 +112,26 @@ def _balance_sheet(yf_ticker: Any) -> dict[str, Any]:
 
     result["total_assets"] = _first_non_negative(latest, ("Total Assets",))
     result["accounts_receivable"] = _first_non_negative(latest, _RECEIVABLES_ROWS)
-    result["balance_sheet_debt"] = _first_non_negative(latest, ("Total Debt",))
+    result["balance_sheet_debt"] = _balance_sheet_debt(latest)
     # no falling back to plain "Cash And Cash Equivalents", it leaves out short-term
     # investments and would make the cash ratio look smaller than it is
     result["balance_sheet_cash"] = _first_non_negative(
         latest, ("Cash Cash Equivalents And Short Term Investments",)
     )
     return result
+
+
+def _balance_sheet_debt(year_data: Any) -> float | None:
+    total = _first_non_negative(year_data, ("Total Debt",))
+    if total is not None:
+        return total
+    # yfinance sometimes leaves Total Debt blank (e.g. XOM 2025) even though it's just
+    # these two added up. Only use them if both are there, half the debt isn't the debt
+    current = _first_non_negative(year_data, ("Current Debt And Capital Lease Obligation",))
+    long_term = _first_non_negative(year_data, ("Long Term Debt And Capital Lease Obligation",))
+    if current is None or long_term is None:
+        return None
+    return current + long_term
 
 
 def _first_non_negative(year_data: Any, rows: tuple[str, ...]) -> float | None:

@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pandas as pd
+import pytest
 
 from clearsift.data.fetcher import fetch_financials
 from clearsift.data.models import CompanyFinancials
@@ -310,3 +311,53 @@ def test_balance_sheet_cash_does_not_fall_back_to_cash_only_row() -> None:
     )
 
     assert _fetch_with_balance_sheet(sheet).balance_sheet_cash is None
+
+
+CURRENT_DEBT = "Current Debt And Capital Lease Obligation"
+LONG_TERM_DEBT = "Long Term Debt And Capital Lease Obligation"
+
+
+def test_total_debt_used_when_present() -> None:
+    sheet = _statement(
+        {"Total Debt": [4.171e10], CURRENT_DEBT: [1.0], LONG_TERM_DEBT: [2.0]}, ["2025-12-31"]
+    )
+
+    assert _fetch_with_balance_sheet(sheet).balance_sheet_debt == 4.171e10
+
+
+def test_missing_total_debt_uses_current_plus_long_term() -> None:
+    # XOM's 2025 balance sheet: Total Debt is blank but both parts are there
+    sheet = _statement(
+        {"Total Debt": [NAN], CURRENT_DEBT: [9.296e9], LONG_TERM_DEBT: [3.4241e10]},
+        ["2025-12-31"],
+    )
+
+    assert _fetch_with_balance_sheet(sheet).balance_sheet_debt == 9.296e9 + 3.4241e10
+
+
+@pytest.mark.parametrize("missing", [CURRENT_DEBT, LONG_TERM_DEBT])
+def test_missing_debt_part_stays_none(missing: str) -> None:
+    rows = {"Total Debt": [NAN], CURRENT_DEBT: [9.296e9], LONG_TERM_DEBT: [3.4241e10]}
+    rows[missing] = [NAN]
+
+    assert _fetch_with_balance_sheet(_statement(rows, ["2025-12-31"])).balance_sheet_debt is None
+
+
+def test_negative_debt_part_stays_none() -> None:
+    sheet = _statement({CURRENT_DEBT: [-1.0], LONG_TERM_DEBT: [3.4241e10]}, ["2025-12-31"])
+
+    assert _fetch_with_balance_sheet(sheet).balance_sheet_debt is None
+
+
+def test_debt_parts_from_older_year_are_not_mixed_in() -> None:
+    # 2025 only has the long-term part. 2024 has everything, but it mustn't fill the gap
+    sheet = _statement(
+        {
+            "Total Debt": [NAN, 4.171e10],
+            CURRENT_DEBT: [NAN, 4.955e9],
+            LONG_TERM_DEBT: [3.4241e10, 3.6755e10],
+        },
+        ["2025-12-31", "2024-12-31"],
+    )
+
+    assert _fetch_with_balance_sheet(sheet).balance_sheet_debt is None
