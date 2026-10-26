@@ -17,6 +17,9 @@ dependencies = [
     "yfinance>=0.2.40",
 ]
 
+[project.scripts]
+clearsift = "clearsift.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "mypy>=1.10",
