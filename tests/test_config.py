@@ -21,6 +21,7 @@ VALID: dict[str, Any] = {
             "max_impermissible_income": 0.0,
         },
         "excluded_sectors": ["sector_a", "sector_b"],
+        "always_exclude_tickers": ["ABC", "VOD.L"],
     },
     "benchmark": {"ticker": None},
 }
@@ -53,6 +54,7 @@ def test_valid_config_values(tmp_path: Path) -> None:
     assert cfg.screening.ratios.max_cash_to_market_cap == 0.30
     assert cfg.screening.ratios.max_impermissible_income == 0.0
     assert cfg.screening.excluded_sectors == ("sector_a", "sector_b")
+    assert cfg.screening.always_exclude_tickers == ("ABC", "VOD.L")
     assert cfg.benchmark_ticker is None
 
 
@@ -178,6 +180,30 @@ def test_market_cap_max_age_equal_to_max_data_age_is_fine(tmp_path: Path) -> Non
 def test_bad_excluded_sectors_raises(tmp_path: Path, value: Any) -> None:
     data = _valid()
     data["screening"]["excluded_sectors"] = value
+
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_empty_always_exclude_tickers_is_fine(tmp_path: Path) -> None:
+    data = _valid()
+    data["screening"]["always_exclude_tickers"] = []
+
+    assert load_config(_write(tmp_path, data)).screening.always_exclude_tickers == ()
+
+
+@pytest.mark.parametrize("value", [None, "ABC", ["abc"], ["ABC", ""], [" ABC"], ["ABC", 3]])
+def test_bad_always_exclude_tickers_raises(tmp_path: Path, value: Any) -> None:
+    data = _valid()
+    data["screening"]["always_exclude_tickers"] = value
+
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_missing_always_exclude_tickers_raises(tmp_path: Path) -> None:
+    data = _valid()
+    del data["screening"]["always_exclude_tickers"]
 
     with pytest.raises(ConfigError):
         load_config(_write(tmp_path, data))

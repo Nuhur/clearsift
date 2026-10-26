@@ -27,6 +27,7 @@ class ScreeningConfig:
     market_cap_max_age_days: int
     ratios: RatioLimits
     excluded_sectors: tuple[str, ...]
+    always_exclude_tickers: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,14 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     ):
         raise ConfigError("screening.excluded_sectors must be a non-empty list of names")
 
+    tickers = screening.get("always_exclude_tickers")
+    # an empty list is fine here, it just means nothing extra gets excluded.
+    # Lowercase or padded tickers would silently never match, so refuse them
+    if not isinstance(tickers, list) or not all(
+        isinstance(t, str) and t and t == t.strip().upper() for t in tickers
+    ):
+        raise ConfigError("screening.always_exclude_tickers must be a list of uppercase tickers")
+
     # the benchmark isn't needed for screening, so it can be left out for now
     benchmark = _section(root.get("benchmark") or {}, "benchmark")
     ticker = benchmark.get("ticker")
@@ -89,6 +98,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
                 max_impermissible_income=_ratio(ratios, "max_impermissible_income"),
             ),
             excluded_sectors=tuple(s.strip() for s in sectors),
+            always_exclude_tickers=tuple(tickers),
         ),
         benchmark_ticker=ticker.strip() if ticker else None,
     )

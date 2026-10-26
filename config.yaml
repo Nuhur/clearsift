@@ -31,6 +31,9 @@ screening:
     - adult_entertainment
     - weapons_and_defence
 
+  # Tickers to exclude whatever their industry says. Uppercase, e.g. "ABC" or "VOD.L".
+  always_exclude_tickers: []
+
 benchmark:
   # Halal benchmark used for every comparison.
   ticker: null  # set once you've chosen an Islamic index ETF
