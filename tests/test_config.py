@@ -40,7 +40,8 @@ def _valid() -> dict[str, Any]:
 def test_repo_config_loads() -> None:
     cfg = load_config(REPO_CONFIG)
 
-    assert cfg.screening.mode == "strict"
+    assert cfg.screening.mode == "standard"
+    assert cfg.screening.ratios.max_impermissible_income == 0.05
     assert cfg.screening.fail_closed is True
     assert cfg.screening.excluded_sectors
 
@@ -118,9 +119,26 @@ def test_missing_ratios_section_raises(tmp_path: Path) -> None:
         load_config(_write(tmp_path, data))
 
 
-def test_non_strict_mode_raises(tmp_path: Path) -> None:
+@pytest.mark.parametrize("value", ["strict", "standard"])
+def test_both_modes_load(tmp_path: Path, value: str) -> None:
     data = _valid()
-    data["screening"]["mode"] = "relaxed"
+    data["screening"]["mode"] = value
+
+    assert load_config(_write(tmp_path, data)).screening.mode == value
+
+
+@pytest.mark.parametrize("value", ["relaxed", "Strict", "", None, True])
+def test_bad_mode_raises(tmp_path: Path, value: Any) -> None:
+    data = _valid()
+    data["screening"]["mode"] = value
+
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_missing_mode_raises(tmp_path: Path) -> None:
+    data = _valid()
+    del data["screening"]["mode"]
 
     with pytest.raises(ConfigError):
         load_config(_write(tmp_path, data))

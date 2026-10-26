@@ -1,9 +1,11 @@
 # Clearsift screening settings.
-# Defaults follow the AAOIFI standard, with stricter rules on top.
+# Defaults follow the AAOIFI standard.
 
 screening:
-  # strict: only "Compliant" passes; anything uncertain is excluded.
-  mode: strict
+  # standard: doubtful businesses pass, with a warning to check them by hand.
+  # strict: only "Compliant" passes, doubtful is excluded.
+  # Missing or stale data is excluded in both.
+  mode: standard
   # Exclude a stock if its data is missing or stale (fail closed).
   fail_closed: true
   # Days before cached financial data counts as stale.
@@ -16,9 +18,9 @@ screening:
     max_debt_to_market_cap: 0.30
     # Cash + interest-bearing investments / market cap must be below this.
     max_cash_to_market_cap: 0.30
-    # Impermissible income / total revenue. 0.0 = zero tolerance.
-    # Set to 0.05 for the AAOIFI limit (then enable purification).
-    max_impermissible_income: 0.0
+    # Impermissible income / total revenue. 0.05 is the AAOIFI limit.
+    # Set to 0.0 for zero tolerance (then only exactly 0 passes).
+    max_impermissible_income: 0.05
 
   excluded_sectors:
     - conventional_banking

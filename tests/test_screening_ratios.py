@@ -157,6 +157,19 @@ def test_missing_market_cap_still_checks_interest_income() -> None:
     ]
 
 
+def test_interest_income_just_under_aaoifi_limit_passes() -> None:
+    result = screen_ratios(_company(interest_income=24.95), CONFIG)
+
+    assert result.status == "compliant"
+    assert "interest income is 4.99% of revenue, limit is 5%" in result.reasons
+
+
+def test_interest_income_on_aaoifi_limit_fails() -> None:
+    result = screen_ratios(_company(interest_income=25.0), CONFIG)
+
+    assert result.reasons == ["interest income is 5.00% of revenue, limit is 5%"]
+
+
 def test_zero_limit_passes_exactly_zero_interest_income() -> None:
     config = _limits(max_impermissible_income=0.0)
 

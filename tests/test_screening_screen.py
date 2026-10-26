@@ -1,4 +1,7 @@
+from dataclasses import replace
 from typing import Any
+
+import pytest
 
 from clearsift.config import RatioLimits, ScreeningConfig
 from clearsift.data.models import CompanyFinancials
@@ -89,13 +92,45 @@ def test_both_excluded_keeps_every_reason() -> None:
     assert len(verdict.ratios.reasons) == 2
 
 
-def test_doubtful_does_not_pass() -> None:
+STANDARD = replace(CONFIG, mode="standard")
+
+
+def test_doubtful_does_not_pass_in_strict_mode() -> None:
     company = _company(sector="Consumer Defensive", industry="Grocery Stores")
 
     verdict = screen_stock("TEST", CONFIG, get=FakeGet(company))
 
     assert verdict.status == "doubtful"
+    assert verdict.needs_review
     assert not verdict.passes
+
+
+def test_doubtful_passes_in_standard_mode() -> None:
+    company = _company(sector="Consumer Defensive", industry="Grocery Stores")
+
+    verdict = screen_stock("TEST", STANDARD, get=FakeGet(company))
+
+    assert verdict.status == "doubtful"
+    assert verdict.needs_review
+    assert verdict.passes
+
+
+@pytest.mark.parametrize("config", [CONFIG, STANDARD], ids=["strict", "standard"])
+def test_excluded_never_passes(config: ScreeningConfig) -> None:
+    company = _company(sector="Consumer Defensive", industry="Grocery Stores", total_debt=500.0)
+
+    verdict = screen_stock("TEST", config, get=FakeGet(company))
+
+    assert verdict.status == "excluded"
+    assert not verdict.passes
+
+
+@pytest.mark.parametrize("config", [CONFIG, STANDARD], ids=["strict", "standard"])
+def test_compliant_passes_in_both_modes(config: ScreeningConfig) -> None:
+    verdict = screen_stock("TEST", config, get=FakeGet(_company()))
+
+    assert verdict.passes
+    assert not verdict.needs_review
 
 
 def test_excluded_beats_doubtful() -> None:

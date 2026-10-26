@@ -92,13 +92,41 @@ def test_reasons_from_both_screens_shown(
     assert "  - debt is 40.00% of market cap, limit is 30%" in out
 
 
-def test_doubtful_fails(config_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    grocer = {**GOOD, "sector": "Consumer Defensive", "industry": "Grocery Stores"}
+GROCER = {**GOOD, "sector": "Consumer Defensive", "industry": "Grocery Stores"}
+CHECK_BY_HAND = "  check by hand: the industry label alone can't confirm this business is halal"
 
-    code = _run(config_path, "KR", data={"KR": grocer})
 
+def test_doubtful_fails_in_strict_mode(
+    config_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = _run(config_path, "KR", data={"KR": GROCER})
+
+    out = capsys.readouterr().out
     assert code == 1
-    assert "KR: FAIL (doubtful)" in capsys.readouterr().out
+    assert "KR: FAIL (doubtful)" in out
+    assert CHECK_BY_HAND in out
+
+
+def test_doubtful_passes_with_warning_in_standard_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["mode"] = "standard"
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    code = _run(path, "KR", data={"KR": GROCER})
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "KR: PASS (doubtful)" in out
+    assert CHECK_BY_HAND in out
+
+
+def test_no_warning_for_compliant(config_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _run(config_path, "MSFT", data={"MSFT": GOOD})
+
+    assert "check by hand" not in capsys.readouterr().out
 
 
 def test_lowercase_ticker_is_uppercased(
@@ -148,7 +176,7 @@ def test_bad_config_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     code = _run(path, "MSFT", data={"MSFT": GOOD})
 
     assert code == 2
-    assert "screening.mode must be 'strict'" in capsys.readouterr().err
+    assert "screening.mode must be 'strict' or 'standard'" in capsys.readouterr().err
 
 
 def test_unmapped_excluded_sector_exits_2(

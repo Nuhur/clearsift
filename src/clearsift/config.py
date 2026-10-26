@@ -3,9 +3,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 import yaml
+
+Mode = Literal["strict", "standard"]
 
 
 class ConfigError(ValueError):
@@ -21,7 +23,7 @@ class RatioLimits:
 
 @dataclass(frozen=True)
 class ScreeningConfig:
-    mode: str
+    mode: Mode
     fail_closed: bool
     max_data_age_days: int
     market_cap_max_age_days: int
@@ -48,9 +50,10 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     screening = _section(root.get("screening"), "screening")
     ratios = _section(screening.get("ratios"), "screening.ratios")
 
-    # strict is the only mode we support, so anything else is probably a typo
-    if screening.get("mode") != "strict":
-        raise ConfigError("screening.mode must be 'strict'")
+    # no fallback: quietly picking a mode could let in stocks you meant to keep out
+    mode = screening.get("mode")
+    if mode not in get_args(Mode):
+        raise ConfigError("screening.mode must be 'strict' or 'standard'")
     # failing closed is a project rule, so the config can't switch it off
     if screening.get("fail_closed") is not True:
         raise ConfigError("screening.fail_closed must be true")
@@ -88,7 +91,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
 
     return Config(
         screening=ScreeningConfig(
-            mode="strict",
+            mode=mode,
             fail_closed=True,
             max_data_age_days=max_age,
             market_cap_max_age_days=market_cap_max_age,

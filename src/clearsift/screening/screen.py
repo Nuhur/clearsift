@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from clearsift.config import ScreeningConfig
+from clearsift.config import Mode, ScreeningConfig
 from clearsift.data.cache import get_financials
 from clearsift.data.models import CompanyFinancials
 from clearsift.screening.business import ScreenResult, Status, screen_business
@@ -17,12 +17,20 @@ class StockVerdict:
     business: ScreenResult
     ratios: ScreenResult
     status: Status
+    mode: Mode
 
     @property
     def passes(self) -> bool:
         """Whether the stock gets in."""
-        # strict mode: doubtful isn't good enough
-        return self.status == "compliant"
+        if self.status == "compliant":
+            return True
+        # standard mode lets doubtful through, it just gets flagged for a manual check
+        return self.status == "doubtful" and self.mode == "standard"
+
+    @property
+    def needs_review(self) -> bool:
+        """Whether someone should check this business by hand."""
+        return self.status == "doubtful"
 
 
 def screen_stock(
@@ -52,4 +60,4 @@ def screen_stock(
     else:
         status = "compliant"
 
-    return StockVerdict(ticker, financials, business, ratios, status)
+    return StockVerdict(ticker, financials, business, ratios, status, config.mode)
