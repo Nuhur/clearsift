@@ -1,4 +1,5 @@
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -11,6 +12,7 @@ CONFIG = ScreeningConfig(
     fail_closed=True,
     max_data_age_days=120,
     market_cap_max_age_days=1,
+    max_interest_income_age_years=3,
     ratios=RatioLimits(
         max_debt_to_market_cap=0.30,
         max_cash_to_market_cap=0.30,
@@ -21,17 +23,19 @@ CONFIG = ScreeningConfig(
 )
 
 
-def _company(**overrides: float | None) -> CompanyFinancials:
+def _company(**overrides: Any) -> CompanyFinancials:
     # every ratio comfortably under its limit unless a test changes it
-    values: dict[str, float | None] = {
+    values: dict[str, Any] = {
         "market_cap": 1000.0,
         "total_debt": 100.0,
         "cash_and_short_term_investments": 200.0,
-        "total_revenue": 500.0,
         "interest_income": 10.0,
+        "interest_income_revenue": 500.0,
+        "interest_income_year": 2025,
+        "latest_income_statement_year": 2025,
     }
     values.update(overrides)
-    return CompanyFinancials(ticker="MSFT", **values)  # type: ignore[arg-type]
+    return CompanyFinancials(ticker="MSFT", **values)
 
 
 def _limits(**overrides: float) -> ScreeningConfig:
@@ -88,7 +92,7 @@ def test_just_under_limit_passes() -> None:
     ("field", "expected"),
     [
         ("market_cap", "market cap is missing"),
-        ("total_revenue", "total revenue is missing"),
+        ("interest_income_revenue", "total revenue is missing"),
         ("total_debt", "debt is missing"),
         ("cash_and_short_term_investments", "cash is missing"),
         ("interest_income", "interest income is missing"),
@@ -117,7 +121,7 @@ def test_zero_or_negative_market_cap_is_excluded(value: float) -> None:
 
 @pytest.mark.parametrize("value", [0.0, -500.0])
 def test_zero_or_negative_revenue_is_excluded(value: float) -> None:
-    result = screen_ratios(_company(total_revenue=value), CONFIG)
+    result = screen_ratios(_company(interest_income_revenue=value), CONFIG)
 
     assert result.status == "excluded"
     assert result.reasons == ["total revenue is zero or negative"]
@@ -213,3 +217,85 @@ def test_fail_on_limit_shows_the_real_number() -> None:
     result = screen_ratios(_company(total_debt=300.0), CONFIG)
 
     assert result.reasons == ["debt is 30.00% of market cap, limit is 30%"]
+
+
+def test_uses_same_year_revenue_not_total_revenue() -> None:
+    company = _company(total_revenue=1_000_000.0, interest_income_revenue=500.0)
+
+    result = screen_ratios(company, CONFIG)
+
+    assert "interest income is 2.00% of revenue, limit is 5%" in result.reasons
+
+
+def test_total_revenue_missing_does_not_matter() -> None:
+    assert screen_ratios(_company(total_revenue=None), CONFIG).status == "compliant"
+
+
+def test_older_year_is_doubtful_with_note() -> None:
+    company = _company(interest_income=4.9, interest_income_year=2023)
+
+    result = screen_ratios(company, CONFIG)
+
+    assert result.status == "doubtful"
+    assert (
+        "interest income is 0.98% of revenue (from 2023, newer years not reported), limit is 5%"
+        in result.reasons
+    )
+
+
+def test_older_year_on_the_age_limit_is_still_used() -> None:
+    result = screen_ratios(_company(interest_income_year=2022), CONFIG)
+
+    assert result.status == "doubtful"
+    assert any("(from 2022, newer years not reported)" in r for r in result.reasons)
+
+
+def test_older_year_over_limit_is_still_excluded() -> None:
+    company = _company(interest_income=30.0, interest_income_year=2023)
+
+    result = screen_ratios(company, CONFIG)
+
+    assert result.status == "excluded"
+    assert result.reasons == [
+        "interest income is 6.00% of revenue (from 2023, newer years not reported), limit is 5%"
+    ]
+
+
+@pytest.mark.parametrize("year", [None, 2021], ids=["never", "too-old"])
+def test_not_disclosed_is_doubtful(year: int | None) -> None:
+    company = _company(
+        interest_income=None if year is None else 10.0,
+        interest_income_revenue=None if year is None else 500.0,
+        interest_income_year=year,
+    )
+
+    result = screen_ratios(company, CONFIG)
+
+    assert result.status == "doubtful"
+    assert "interest income not disclosed in recent reports, check by hand" in result.reasons
+
+
+def test_not_disclosed_plus_a_failure_is_excluded() -> None:
+    company = _company(total_debt=500.0, interest_income_year=None)
+
+    result = screen_ratios(company, CONFIG)
+
+    assert result.status == "excluded"
+    assert result.reasons == [
+        "debt is 50.00% of market cap, limit is 30%",
+        "interest income not disclosed in recent reports, check by hand",
+    ]
+
+
+def test_no_income_statement_is_missing() -> None:
+    company = _company(
+        interest_income=None,
+        interest_income_revenue=None,
+        interest_income_year=None,
+        latest_income_statement_year=None,
+    )
+
+    result = screen_ratios(company, CONFIG)
+
+    assert result.status == "excluded"
+    assert result.reasons == ["interest income is missing"]

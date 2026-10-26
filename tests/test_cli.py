@@ -14,6 +14,7 @@ CONFIG: dict[str, Any] = {
         "fail_closed": True,
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
+        "max_interest_income_age_years": 3,
         "ratios": {
             "max_debt_to_market_cap": 0.30,
             "max_cash_to_market_cap": 0.30,
@@ -33,6 +34,9 @@ GOOD: dict[str, Any] = {
     "total_debt": 100.0,
     "cash_and_short_term_investments": 200.0,
     "total_revenue": 500.0,
+    "interest_income_revenue": 500.0,
+    "interest_income_year": 2025,
+    "latest_income_statement_year": 2025,
     "interest_income": 10.0,
 }
 
@@ -121,6 +125,38 @@ def test_doubtful_passes_with_warning_in_standard_mode(
     assert code == 0
     assert "KR: PASS (doubtful)" in out
     assert CHECK_BY_HAND in out
+
+
+OLDER_YEAR_WARNING = "  check by hand: interest income isn't in the latest report"
+
+
+def test_older_interest_income_fails_in_strict_mode(
+    config_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = _run(config_path, "AAPL", data={"AAPL": {**GOOD, "interest_income_year": 2023}})
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "AAPL: FAIL (doubtful)" in out
+    assert OLDER_YEAR_WARNING in out
+    assert "(from 2023, newer years not reported)" in out
+
+
+def test_older_interest_income_passes_with_warning_in_standard_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["mode"] = "standard"
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    code = _run(path, "AAPL", data={"AAPL": {**GOOD, "interest_income_year": 2023}})
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "AAPL: PASS (doubtful)" in out
+    assert OLDER_YEAR_WARNING in out
+    assert CHECK_BY_HAND not in out
 
 
 def test_no_warning_for_compliant(config_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

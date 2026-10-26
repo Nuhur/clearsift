@@ -55,10 +55,12 @@ def format_verdict(verdict: StockVerdict) -> str:
     # an empty fetch usually means yfinance fell over, not that the company is bad
     if _has_no_data(financials):
         lines.append("  no data from yfinance, try again later")
-    if verdict.needs_review:
+    if verdict.needs_review and verdict.business.status == "doubtful":
         lines.append(
             "  check by hand: the industry label alone can't confirm this business is halal"
         )
+    if verdict.needs_review and verdict.ratios.status == "doubtful":
+        lines.append("  check by hand: interest income isn't in the latest report")
     lines += [f"  - {reason}" for reason in verdict.business.reasons + verdict.ratios.reasons]
     return "\n".join(lines)
 

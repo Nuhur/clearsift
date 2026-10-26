@@ -1,67 +1,96 @@
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 from clearsift.config import ScreeningConfig
 from clearsift.data.models import CompanyFinancials
 from clearsift.screening.business import ScreenResult
 
+# what each single check found: fine, needs a manual look, or a hard fail
+Outcome = Literal["pass", "doubt", "fail"]
+Check = tuple[Outcome, str]
+
 
 def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> ScreenResult:
     """Check a company's debt, cash and interest income against the limits in the config."""
-    failures: list[str] = []
-    passes: list[str] = []
+    limits = config.ratios
+    checks: list[Check] = []
 
     # fail closed: a missing or non-positive base means none of its ratios can be trusted
-    market_cap = _base(financials.market_cap, "market cap", failures)
-    revenue = _base(financials.total_revenue, "total revenue", failures)
-
-    limits = config.ratios
-    checks = (
-        ("debt", financials.total_debt, market_cap, "market cap", limits.max_debt_to_market_cap),
-        (
-            "cash",
-            financials.cash_and_short_term_investments,
-            market_cap,
-            "market cap",
-            limits.max_cash_to_market_cap,
-        ),
-        (
-            "interest income",
-            financials.interest_income,
-            revenue,
-            "revenue",
-            limits.max_impermissible_income,
-        ),
+    market_cap = _base(financials.market_cap, "market cap", checks)
+    checks += _ratio(
+        "debt", financials.total_debt, market_cap, "market cap", limits.max_debt_to_market_cap
     )
-    for name, value, base, base_name, limit in checks:
-        if value is None or not math.isfinite(value):
-            failures.append(f"{name} is missing")
-            continue
-        # a negative amount would slip under any limit, so it can't be trusted
-        if value < 0:
-            failures.append(f"{name} is negative")
-            continue
-        if base is None:
-            continue
+    checks += _ratio(
+        "cash",
+        financials.cash_and_short_term_investments,
+        market_cap,
+        "market cap",
+        limits.max_cash_to_market_cap,
+    )
+    checks += _interest_income(financials, config)
 
-        ratio = value / base
-        passed = _within_limit(ratio, limit)
-        shown = _actual_percent(ratio, limit, passed)
-        reason = f"{name} is {shown} of {base_name}, limit is {_limit_percent(limit)}"
-        (passes if passed else failures).append(reason)
-
-    if failures:
-        return ScreenResult("excluded", failures)
-    return ScreenResult("compliant", passes)
+    outcomes = {outcome for outcome, _ in checks}
+    if "fail" in outcomes:
+        return ScreenResult("excluded", [reason for outcome, reason in checks if outcome != "pass"])
+    if "doubt" in outcomes:
+        return ScreenResult("doubtful", [reason for _, reason in checks])
+    return ScreenResult("compliant", [reason for _, reason in checks])
 
 
-def _base(value: float | None, name: str, failures: list[str]) -> float | None:
+def _interest_income(financials: CompanyFinancials, config: ScreeningConfig) -> list[Check]:
+    latest = financials.latest_income_statement_year
+    year = financials.interest_income_year
+    # no income statement at all means yfinance gave us nothing, which is missing data
+    if latest is None:
+        return [("fail", "interest income is missing")]
+    # the company has reports but stopped showing interest income in them. That's not
+    # the same as no data, so it's a manual check rather than a hard fail (like Zoya)
+    if year is None or latest - year > config.max_interest_income_age_years:
+        return [("doubt", "interest income not disclosed in recent reports, check by hand")]
+
+    checks: list[Check] = []
+    revenue = _base(financials.interest_income_revenue, "total revenue", checks)
+    note = "" if year == latest else f" (from {year}, newer years not reported)"
+    checks += _ratio(
+        "interest income",
+        financials.interest_income,
+        revenue,
+        "revenue" + note,
+        config.ratios.max_impermissible_income,
+    )
+    # an older year is the best we've got, but it might not reflect the company today
+    if note:
+        checks = [("doubt" if outcome == "pass" else outcome, reason) for outcome, reason in checks]
+    return checks
+
+
+def _ratio(
+    name: str, value: float | None, base: float | None, base_name: str, limit: float
+) -> list[Check]:
     if value is None or not math.isfinite(value):
-        failures.append(f"{name} is missing")
+        return [("fail", f"{name} is missing")]
+    # a negative amount would slip under any limit, so it can't be trusted
+    if value < 0:
+        return [("fail", f"{name} is negative")]
+    # the base already failed, and that reason is in the list
+    if base is None:
+        return []
+
+    ratio = value / base
+    passed = _within_limit(ratio, limit)
+    shown = _actual_percent(ratio, limit, passed)
+    reason = f"{name} is {shown} of {base_name}, limit is {_limit_percent(limit)}"
+    return [("pass" if passed else "fail", reason)]
+
+
+def _base(value: float | None, name: str, checks: list[Check]) -> float | None:
+    if value is None or not math.isfinite(value):
+        checks.append(("fail", f"{name} is missing"))
         return None
     if value <= 0:
-        failures.append(f"{name} is zero or negative")
+        checks.append(("fail", f"{name} is zero or negative"))
         return None
     return value
 

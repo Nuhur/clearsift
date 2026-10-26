@@ -22,6 +22,9 @@ def _financials(ticker: str = "MSFT", fetched_at: datetime = NOW, **overrides) -
         "cash_and_short_term_investments": 1e11,
         "total_revenue": 2e11,
         "interest_income": 1e9,
+        "interest_income_revenue": 2e11,
+        "interest_income_year": 2025,
+        "latest_income_statement_year": 2025,
     }
     values.update(overrides)
     return CompanyFinancials(ticker=ticker, fetched_at=fetched_at, **values)
@@ -274,3 +277,14 @@ def test_old_style_cache_gets_refetched_and_saved(db_path: Path) -> None:
     assert _get(db_path, fetch) == fresh
     assert fetch.calls == ["MSFT"]
     assert _load(db_path) == fresh
+
+
+def test_save_then_load_keeps_interest_income_year_fields(db_path: Path) -> None:
+    saved = _financials(interest_income_revenue=3e11, interest_income_year=2023)
+    save_financials(saved, db_path)
+
+    loaded = _load(db_path)
+    assert loaded is not None
+    assert loaded.interest_income_revenue == 3e11
+    assert loaded.interest_income_year == 2023
+    assert loaded.latest_income_statement_year == 2025

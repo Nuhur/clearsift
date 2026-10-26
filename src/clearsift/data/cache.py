@@ -19,10 +19,13 @@ _FIELDS = (
     "cash_and_short_term_investments",
     "total_revenue",
     "interest_income",
+    "interest_income_revenue",
+    "interest_income_year",
+    "latest_income_statement_year",
 )
 
 # bump this whenever the table changes, so old cache files get cleared out
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS financials (
@@ -34,6 +37,9 @@ CREATE TABLE IF NOT EXISTS financials (
     cash_and_short_term_investments REAL,
     total_revenue REAL,
     interest_income REAL,
+    interest_income_revenue REAL,
+    interest_income_year INTEGER,
+    latest_income_statement_year INTEGER,
     fetched_at TEXT NOT NULL
 )
 """

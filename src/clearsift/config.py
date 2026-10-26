@@ -27,6 +27,7 @@ class ScreeningConfig:
     fail_closed: bool
     max_data_age_days: int
     market_cap_max_age_days: int
+    max_interest_income_age_years: int
     ratios: RatioLimits
     excluded_sectors: tuple[str, ...]
     always_exclude_tickers: tuple[str, ...]
@@ -65,6 +66,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         raise ConfigError(
             "screening.market_cap_max_age_days can't be bigger than max_data_age_days"
         )
+    interest_income_max_age = _days(screening, "max_interest_income_age_years")
 
     sectors = screening.get("excluded_sectors")
     # an empty list would let every sector through, so treat it as a mistake
@@ -95,6 +97,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             fail_closed=True,
             max_data_age_days=max_age,
             market_cap_max_age_days=market_cap_max_age,
+            max_interest_income_age_years=interest_income_max_age,
             ratios=RatioLimits(
                 max_debt_to_market_cap=_ratio(ratios, "max_debt_to_market_cap"),
                 max_cash_to_market_cap=_ratio(ratios, "max_cash_to_market_cap"),

@@ -12,6 +12,7 @@ CONFIG = ScreeningConfig(
     fail_closed=True,
     max_data_age_days=120,
     market_cap_max_age_days=1,
+    max_interest_income_age_years=3,
     ratios=RatioLimits(
         max_debt_to_market_cap=0.30,
         max_cash_to_market_cap=0.30,
@@ -31,6 +32,9 @@ def _company(**overrides: Any) -> CompanyFinancials:
         "total_debt": 100.0,
         "cash_and_short_term_investments": 200.0,
         "total_revenue": 500.0,
+        "interest_income_revenue": 500.0,
+        "interest_income_year": 2025,
+        "latest_income_statement_year": 2025,
         "interest_income": 10.0,
     }
     values.update(overrides)
@@ -148,3 +152,28 @@ def test_ticker_uppercased_and_day_limits_passed_on() -> None:
 
     assert verdict.ticker == "MSFT"
     assert get.calls == [("MSFT", {"max_age_days": 120, "market_cap_max_age_days": 1})]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"interest_income_year": 2023}, {"interest_income_year": None}],
+    ids=["older-year", "not-disclosed"],
+)
+def test_unclear_interest_income_fails_in_strict_mode(overrides: dict[str, Any]) -> None:
+    verdict = screen_stock("TEST", CONFIG, get=FakeGet(_company(**overrides)))
+
+    assert verdict.status == "doubtful"
+    assert not verdict.passes
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"interest_income_year": 2023}, {"interest_income_year": None}],
+    ids=["older-year", "not-disclosed"],
+)
+def test_unclear_interest_income_passes_in_standard_mode(overrides: dict[str, Any]) -> None:
+    verdict = screen_stock("TEST", STANDARD, get=FakeGet(_company(**overrides)))
+
+    assert verdict.status == "doubtful"
+    assert verdict.needs_review
+    assert verdict.passes

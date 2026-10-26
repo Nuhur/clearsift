@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pandas as pd
 
 from clearsift.data.fetcher import fetch_financials
+from clearsift.data.models import CompanyFinancials
 
 FULL_INFO = {
     "sector": "Technology",
@@ -101,70 +102,115 @@ def test_fetched_at_is_set() -> None:
     assert before <= cf.fetched_at <= after
 
 
+NAN = float("nan")
+
+
 def _statement(rows: dict[str, list[object]], years: list[str]) -> pd.DataFrame:
     # same shape as yfinance's income_stmt: one row per item, one column per year
     return pd.DataFrame(rows, index=pd.to_datetime(years)).T
 
 
-def _ticker_with_statement(statement: object) -> MagicMock:
+def _fetch_with_statement(statement: object) -> CompanyFinancials:
     mock = _mock_ticker(FULL_INFO)
     mock.income_stmt = statement
-    return mock
-
-
-def _fetch_with_statement(statement: object) -> float | None:
-    with patch("clearsift.data.fetcher.yf.Ticker", return_value=_ticker_with_statement(statement)):
-        return fetch_financials("MSFT").interest_income
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=mock):
+        return fetch_financials("MSFT")
 
 
 def test_interest_income_from_statement() -> None:
-    statement = _statement({"Interest Income": [3e9]}, ["2025-06-30"])
+    statement = _statement({"Interest Income": [3e9], "Total Revenue": [2e11]}, ["2025-06-30"])
 
-    assert _fetch_with_statement(statement) == 3e9
+    cf = _fetch_with_statement(statement)
+
+    assert cf.interest_income == 3e9
+    assert cf.interest_income_revenue == 2e11
+    assert cf.interest_income_year == 2025
+    assert cf.latest_income_statement_year == 2025
 
 
 def test_interest_income_uses_latest_year_whatever_the_order() -> None:
     statement = _statement(
-        {"Interest Income": [1e9, 3e9, 2e9]}, ["2023-06-30", "2025-06-30", "2024-06-30"]
+        {"Interest Income": [1e9, 3e9, 2e9], "Total Revenue": [1e11, 3e11, 2e11]},
+        ["2023-06-30", "2025-06-30", "2024-06-30"],
     )
 
-    assert _fetch_with_statement(statement) == 3e9
+    cf = _fetch_with_statement(statement)
+
+    assert cf.interest_income == 3e9
+    assert cf.interest_income_revenue == 3e11
+    assert cf.interest_income_year == 2025
 
 
 def test_interest_income_falls_back_to_non_operating() -> None:
     statement = _statement(
-        {"Interest Income": [float("nan")], "Interest Income Non Operating": [2e9]}, ["2025-06-30"]
+        {"Interest Income": [NAN], "Interest Income Non Operating": [2e9], "Total Revenue": [2e11]},
+        ["2025-06-30"],
     )
 
-    assert _fetch_with_statement(statement) == 2e9
+    assert _fetch_with_statement(statement).interest_income == 2e9
 
 
-def test_interest_income_does_not_use_older_years() -> None:
-    statement = _statement({"Interest Income": [1e9, float("nan")]}, ["2024-06-30", "2025-06-30"])
+def test_falls_back_to_older_year_with_same_year_revenue() -> None:
+    # like Apple: newer years have NaN for interest income
+    statement = _statement(
+        {
+            "Interest Income": [NAN, NAN, 3.75e9, 2.8e9],
+            "Total Revenue": [416e9, 391e9, 383e9, 394e9],
+        },
+        ["2025-09-30", "2024-09-30", "2023-09-30", "2022-09-30"],
+    )
 
-    assert _fetch_with_statement(statement) is None
+    cf = _fetch_with_statement(statement)
+
+    assert cf.interest_income == 3.75e9
+    assert cf.interest_income_revenue == 383e9
+    assert cf.interest_income_year == 2023
+    assert cf.latest_income_statement_year == 2025
 
 
-def test_negative_interest_income_becomes_none() -> None:
-    statement = _statement({"Interest Income": [-5e8]}, ["2025-06-30"])
+def test_year_without_revenue_is_skipped() -> None:
+    statement = _statement(
+        {"Interest Income": [3e9, 2e9], "Total Revenue": [NAN, 1e11]},
+        ["2025-06-30", "2024-06-30"],
+    )
 
-    assert _fetch_with_statement(statement) is None
+    cf = _fetch_with_statement(statement)
+
+    assert cf.interest_income == 2e9
+    assert cf.interest_income_year == 2024
+
+
+def test_negative_interest_income_is_skipped() -> None:
+    statement = _statement(
+        {"Interest Income": [-5e8, 1e9], "Total Revenue": [2e11, 1e11]},
+        ["2025-06-30", "2024-06-30"],
+    )
+
+    assert _fetch_with_statement(statement).interest_income_year == 2024
 
 
 def test_zero_interest_income_is_kept() -> None:
-    statement = _statement({"Interest Income": [0.0]}, ["2025-06-30"])
+    statement = _statement({"Interest Income": [0.0], "Total Revenue": [2e11]}, ["2025-06-30"])
 
-    assert _fetch_with_statement(statement) == 0.0
+    assert _fetch_with_statement(statement).interest_income == 0.0
 
 
-def test_interest_income_missing_rows_becomes_none() -> None:
-    statement = _statement({"Total Revenue": [2e11]}, ["2025-06-30"])
+def test_no_interest_income_in_any_year_keeps_latest_year() -> None:
+    statement = _statement({"Total Revenue": [2e11, 1e11]}, ["2025-06-30", "2024-06-30"])
 
-    assert _fetch_with_statement(statement) is None
+    cf = _fetch_with_statement(statement)
+
+    assert cf.interest_income is None
+    assert cf.interest_income_revenue is None
+    assert cf.interest_income_year is None
+    assert cf.latest_income_statement_year == 2025
 
 
 def test_empty_statement_gives_none() -> None:
-    assert _fetch_with_statement(pd.DataFrame()) is None
+    cf = _fetch_with_statement(pd.DataFrame())
+
+    assert cf.interest_income is None
+    assert cf.latest_income_statement_year is None
 
 
 def test_broken_statement_keeps_other_fields() -> None:
@@ -174,5 +220,6 @@ def test_broken_statement_keeps_other_fields() -> None:
         cf = fetch_financials("MSFT")
 
     assert cf.interest_income is None
+    assert cf.latest_income_statement_year is None
     assert cf.market_cap == 3e12
     assert cf.sector == "Technology"

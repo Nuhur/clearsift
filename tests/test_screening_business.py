@@ -17,6 +17,7 @@ CONFIG = ScreeningConfig(
     fail_closed=True,
     max_data_age_days=120,
     market_cap_max_age_days=1,
+    max_interest_income_age_years=3,
     ratios=RatioLimits(
         max_debt_to_market_cap=0.30,
         max_cash_to_market_cap=0.30,

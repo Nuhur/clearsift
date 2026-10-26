@@ -43,7 +43,7 @@ def fetch_financials(ticker: str) -> CompanyFinancials:
     kwargs["sector"] = info.get("sector") or None
     kwargs["industry"] = info.get("industry") or None
 
-    kwargs["interest_income"] = _latest_interest_income(yf_ticker)
+    kwargs.update(_interest_income(yf_ticker))
 
     return CompanyFinancials(ticker=ticker, **kwargs)  # type: ignore[arg-type]
 
@@ -57,19 +57,42 @@ def _number(raw: Any) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def _latest_interest_income(yf_ticker: Any) -> float | None:
+def _interest_income(yf_ticker: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "interest_income": None,
+        "interest_income_revenue": None,
+        "interest_income_year": None,
+        "latest_income_statement_year": None,
+    }
     # kept apart from info so a broken income statement doesn't lose the other fields
     try:
         statement = yf_ticker.income_stmt
         if not isinstance(statement, pd.DataFrame) or statement.empty:
-            return None
-        # columns are year-end dates, so pick the latest instead of trusting the order
-        latest = statement[max(statement.columns)]
+            return result
+        # columns are year-end dates, so sort them instead of trusting the order
+        columns = sorted(statement.columns, reverse=True)
+        years = [pd.Timestamp(column).year for column in columns]
     except Exception:
-        return None
+        return result
 
+    result["latest_income_statement_year"] = years[0]
+    # some companies (e.g. Apple) stopped reporting interest income, so walk back to the
+    # newest year that has it. How old is too old is up to the config, not us
+    for column, year in zip(columns, years, strict=True):
+        year_data = statement[column]
+        income = _interest_income_for_year(year_data)
+        revenue = _number(year_data.get("Total Revenue"))
+        if income is not None and revenue is not None:
+            result.update(
+                interest_income=income, interest_income_revenue=revenue, interest_income_year=year
+            )
+            break
+    return result
+
+
+def _interest_income_for_year(year_data: Any) -> float | None:
     for row in _INTEREST_INCOME_ROWS:
-        value = _number(latest.get(row))
+        value = _number(year_data.get(row))
         # negative interest income doesn't make sense, so treat it as bad data
         if value is not None and value >= 0:
             return value

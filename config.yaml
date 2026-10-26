@@ -12,6 +12,9 @@ screening:
   max_data_age_days: 120
   # Market cap moves daily, so it goes stale much sooner than the rest.
   market_cap_max_age_days: 1
+  # Some companies stop reporting interest income. Use the newest year that has it,
+  # as long as it's no more than this many years before the latest report.
+  max_interest_income_age_years: 3
 
   ratios:
     # Interest-bearing debt / market cap must be below this.

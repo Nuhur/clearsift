@@ -15,6 +15,7 @@ VALID: dict[str, Any] = {
         "fail_closed": True,
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
+        "max_interest_income_age_years": 3,
         "ratios": {
             "max_debt_to_market_cap": 0.30,
             "max_cash_to_market_cap": 0.30,
@@ -51,6 +52,7 @@ def test_valid_config_values(tmp_path: Path) -> None:
 
     assert cfg.screening.max_data_age_days == 120
     assert cfg.screening.market_cap_max_age_days == 1
+    assert cfg.screening.max_interest_income_age_years == 3
     assert cfg.screening.ratios.max_debt_to_market_cap == 0.30
     assert cfg.screening.ratios.max_cash_to_market_cap == 0.30
     assert cfg.screening.ratios.max_impermissible_income == 0.0
@@ -192,6 +194,23 @@ def test_market_cap_max_age_equal_to_max_data_age_is_fine(tmp_path: Path) -> Non
     data["screening"]["market_cap_max_age_days"] = 120
 
     assert load_config(_write(tmp_path, data)).screening.market_cap_max_age_days == 120
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "3", None])
+def test_bad_interest_income_age_raises(tmp_path: Path, value: Any) -> None:
+    data = _valid()
+    data["screening"]["max_interest_income_age_years"] = value
+
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_missing_interest_income_age_raises(tmp_path: Path) -> None:
+    data = _valid()
+    del data["screening"]["max_interest_income_age_years"]
+
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
 
 
 @pytest.mark.parametrize("value", [[], None, "sector_a", ["sector_a", ""], ["sector_a", 3]])
