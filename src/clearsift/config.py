@@ -56,6 +56,11 @@ def load_config(path: str | Path = "config.yaml") -> Config:
 
     max_age = _days(screening, "max_data_age_days")
     market_cap_max_age = _days(screening, "market_cap_max_age_days")
+    # the whole row goes stale first, so a bigger market cap limit would never kick in
+    if market_cap_max_age > max_age:
+        raise ConfigError(
+            "screening.market_cap_max_age_days can't be bigger than max_data_age_days"
+        )
 
     sectors = screening.get("excluded_sectors")
     # an empty list would let every sector through, so treat it as a mistake

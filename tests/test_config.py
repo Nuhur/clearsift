@@ -159,6 +159,21 @@ def test_missing_market_cap_max_age_raises(tmp_path: Path) -> None:
         load_config(_write(tmp_path, data))
 
 
+def test_market_cap_max_age_bigger_than_max_data_age_raises(tmp_path: Path) -> None:
+    data = _valid()
+    data["screening"]["market_cap_max_age_days"] = 121
+
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_market_cap_max_age_equal_to_max_data_age_is_fine(tmp_path: Path) -> None:
+    data = _valid()
+    data["screening"]["market_cap_max_age_days"] = 120
+
+    assert load_config(_write(tmp_path, data)).screening.market_cap_max_age_days == 120
+
+
 @pytest.mark.parametrize("value", [[], None, "sector_a", ["sector_a", ""], ["sector_a", 3]])
 def test_bad_excluded_sectors_raises(tmp_path: Path, value: Any) -> None:
     data = _valid()
