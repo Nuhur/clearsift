@@ -18,7 +18,11 @@ _FIELDS = (
     "total_debt",
     "cash_and_short_term_investments",
     "total_revenue",
+    "interest_income",
 )
+
+# bump this whenever the table changes, so old cache files get cleared out
+_SCHEMA_VERSION = 2
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS financials (
@@ -29,6 +33,7 @@ CREATE TABLE IF NOT EXISTS financials (
     total_debt REAL,
     cash_and_short_term_investments REAL,
     total_revenue REAL,
+    interest_income REAL,
     fetched_at TEXT NOT NULL
 )
 """
@@ -126,5 +131,10 @@ def get_financials(
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    # an old cache file has the wrong columns. It's only a cache, so wipe it and every
+    # ticker gets fetched again
+    if conn.execute("PRAGMA user_version").fetchone()[0] != _SCHEMA_VERSION:
+        conn.execute("DROP TABLE IF EXISTS financials")
+        conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
     conn.execute(_CREATE_TABLE)
     return conn

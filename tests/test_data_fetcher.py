@@ -1,4 +1,6 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
+
+import pandas as pd
 
 from clearsift.data.fetcher import fetch_financials
 
@@ -97,3 +99,80 @@ def test_fetched_at_is_set() -> None:
     after = datetime.now(UTC)
 
     assert before <= cf.fetched_at <= after
+
+
+def _statement(rows: dict[str, list[object]], years: list[str]) -> pd.DataFrame:
+    # same shape as yfinance's income_stmt: one row per item, one column per year
+    return pd.DataFrame(rows, index=pd.to_datetime(years)).T
+
+
+def _ticker_with_statement(statement: object) -> MagicMock:
+    mock = _mock_ticker(FULL_INFO)
+    mock.income_stmt = statement
+    return mock
+
+
+def _fetch_with_statement(statement: object) -> float | None:
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=_ticker_with_statement(statement)):
+        return fetch_financials("MSFT").interest_income
+
+
+def test_interest_income_from_statement() -> None:
+    statement = _statement({"Interest Income": [3e9]}, ["2025-06-30"])
+
+    assert _fetch_with_statement(statement) == 3e9
+
+
+def test_interest_income_uses_latest_year_whatever_the_order() -> None:
+    statement = _statement(
+        {"Interest Income": [1e9, 3e9, 2e9]}, ["2023-06-30", "2025-06-30", "2024-06-30"]
+    )
+
+    assert _fetch_with_statement(statement) == 3e9
+
+
+def test_interest_income_falls_back_to_non_operating() -> None:
+    statement = _statement(
+        {"Interest Income": [float("nan")], "Interest Income Non Operating": [2e9]}, ["2025-06-30"]
+    )
+
+    assert _fetch_with_statement(statement) == 2e9
+
+
+def test_interest_income_does_not_use_older_years() -> None:
+    statement = _statement({"Interest Income": [1e9, float("nan")]}, ["2024-06-30", "2025-06-30"])
+
+    assert _fetch_with_statement(statement) is None
+
+
+def test_negative_interest_income_becomes_none() -> None:
+    statement = _statement({"Interest Income": [-5e8]}, ["2025-06-30"])
+
+    assert _fetch_with_statement(statement) is None
+
+
+def test_zero_interest_income_is_kept() -> None:
+    statement = _statement({"Interest Income": [0.0]}, ["2025-06-30"])
+
+    assert _fetch_with_statement(statement) == 0.0
+
+
+def test_interest_income_missing_rows_becomes_none() -> None:
+    statement = _statement({"Total Revenue": [2e11]}, ["2025-06-30"])
+
+    assert _fetch_with_statement(statement) is None
+
+
+def test_empty_statement_gives_none() -> None:
+    assert _fetch_with_statement(pd.DataFrame()) is None
+
+
+def test_broken_statement_keeps_other_fields() -> None:
+    mock = _mock_ticker(FULL_INFO)
+    type(mock).income_stmt = PropertyMock(side_effect=Exception("network error"))
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=mock):
+        cf = fetch_financials("MSFT")
+
+    assert cf.interest_income is None
+    assert cf.market_cap == 3e12
+    assert cf.sector == "Technology"

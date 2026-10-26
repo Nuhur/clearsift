@@ -13,4 +13,5 @@ class CompanyFinancials:
     total_debt: float | None = None
     cash_and_short_term_investments: float | None = None
     total_revenue: float | None = None
+    interest_income: float | None = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))

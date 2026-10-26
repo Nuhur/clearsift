@@ -16,6 +16,7 @@ def test_optional_fields_default_none() -> None:
     assert cf.total_debt is None
     assert cf.cash_and_short_term_investments is None
     assert cf.total_revenue is None
+    assert cf.interest_income is None
 
 
 def test_fetched_at_defaults_to_utc_now() -> None:

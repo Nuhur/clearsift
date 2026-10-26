@@ -21,6 +21,7 @@ def _financials(ticker: str = "MSFT", fetched_at: datetime = NOW, **overrides) -
         "total_debt": 5e10,
         "cash_and_short_term_investments": 1e11,
         "total_revenue": 2e11,
+        "interest_income": 1e9,
     }
     values.update(overrides)
     return CompanyFinancials(ticker=ticker, fetched_at=fetched_at, **values)
@@ -225,3 +226,51 @@ def test_get_caches_partial_result(db_path: Path) -> None:
     _get(db_path, fetch)
 
     assert _load(db_path) == partial
+
+
+def _write_old_style_cache(db_path: Path, fetched_at: datetime) -> None:
+    # the table as it was before interest_income was added
+    db_path.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(
+            """
+            CREATE TABLE financials (
+                ticker TEXT PRIMARY KEY,
+                sector TEXT,
+                industry TEXT,
+                market_cap REAL,
+                total_debt REAL,
+                cash_and_short_term_investments REAL,
+                total_revenue REAL,
+                fetched_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO financials VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("MSFT", "Technology", "Software", 3e12, 5e10, 1e11, 2e11, fetched_at.isoformat()),
+        )
+
+
+def test_save_then_load_keeps_interest_income(db_path: Path) -> None:
+    save_financials(_financials(interest_income=4.5e9), db_path)
+
+    loaded = _load(db_path)
+    assert loaded is not None
+    assert loaded.interest_income == 4.5e9
+
+
+def test_old_style_cache_counts_as_missing(db_path: Path) -> None:
+    _write_old_style_cache(db_path, fetched_at=NOW - timedelta(hours=1))
+
+    assert _load(db_path) is None
+
+
+def test_old_style_cache_gets_refetched_and_saved(db_path: Path) -> None:
+    _write_old_style_cache(db_path, fetched_at=NOW - timedelta(hours=1))
+    fresh = _financials()
+    fetch = FakeFetch(fresh)
+
+    assert _get(db_path, fetch) == fresh
+    assert fetch.calls == ["MSFT"]
+    assert _load(db_path) == fresh
