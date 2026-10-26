@@ -43,18 +43,18 @@ def test_all_ratios_pass() -> None:
 
     assert result.status == "compliant"
     assert result.reasons == [
-        "debt is 10.0% of market cap, limit is 30%",
-        "cash is 20.0% of market cap, limit is 30%",
-        "interest income is 2.0% of revenue, limit is 5%",
+        "debt is 10.00% of market cap, limit is 30%",
+        "cash is 20.00% of market cap, limit is 30%",
+        "interest income is 2.00% of revenue, limit is 5%",
     ]
 
 
 @pytest.mark.parametrize(
     ("field", "value", "expected"),
     [
-        ("total_debt", 342.0, "debt is 34.2% of market cap, limit is 30%"),
-        ("cash_and_short_term_investments", 400.0, "cash is 40.0% of market cap, limit is 30%"),
-        ("interest_income", 30.0, "interest income is 6.0% of revenue, limit is 5%"),
+        ("total_debt", 342.0, "debt is 34.20% of market cap, limit is 30%"),
+        ("cash_and_short_term_investments", 400.0, "cash is 40.00% of market cap, limit is 30%"),
+        ("interest_income", 30.0, "interest income is 6.00% of revenue, limit is 5%"),
     ],
 )
 def test_each_ratio_fails(field: str, value: float, expected: str) -> None:
@@ -153,7 +153,7 @@ def test_missing_market_cap_still_checks_interest_income() -> None:
 
     assert result.reasons == [
         "market cap is missing",
-        "interest income is 6.0% of revenue, limit is 5%",
+        "interest income is 6.00% of revenue, limit is 5%",
     ]
 
 
@@ -163,7 +163,7 @@ def test_zero_limit_passes_exactly_zero_interest_income() -> None:
     result = screen_ratios(_company(interest_income=0.0), config)
 
     assert result.status == "compliant"
-    assert "interest income is 0.0% of revenue, limit is 0%" in result.reasons
+    assert "interest income is 0.00% of revenue, limit is 0%" in result.reasons
 
 
 def test_zero_limit_excludes_any_interest_income() -> None:
@@ -172,7 +172,7 @@ def test_zero_limit_excludes_any_interest_income() -> None:
     result = screen_ratios(_company(interest_income=0.01), config)
 
     assert result.status == "excluded"
-    assert result.reasons == ["interest income is under 0.1% of revenue, limit is 0%"]
+    assert result.reasons == ["interest income is under 0.01% of revenue, limit is 0%"]
 
 
 def test_zero_limit_applies_to_debt_too() -> None:
@@ -180,3 +180,23 @@ def test_zero_limit_applies_to_debt_too() -> None:
 
     assert screen_ratios(_company(total_debt=0.0), config).status == "compliant"
     assert screen_ratios(_company(total_debt=1.0), config).status == "excluded"
+
+
+def test_two_decimals_just_under_limit() -> None:
+    result = screen_ratios(_company(total_debt=299.6), CONFIG)
+
+    assert result.status == "compliant"
+    assert result.reasons[0] == "debt is 29.96% of market cap, limit is 30%"
+
+
+def test_pass_that_would_round_up_to_limit_says_just_under() -> None:
+    result = screen_ratios(_company(total_debt=299.996), CONFIG)
+
+    assert result.status == "compliant"
+    assert result.reasons[0] == "debt is just under 30% of market cap, limit is 30%"
+
+
+def test_fail_on_limit_shows_the_real_number() -> None:
+    result = screen_ratios(_company(total_debt=300.0), CONFIG)
+
+    assert result.reasons == ["debt is 30.00% of market cap, limit is 30%"]

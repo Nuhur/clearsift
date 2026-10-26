@@ -46,8 +46,10 @@ def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> Scr
             continue
 
         ratio = value / base
-        reason = f"{name} is {_actual_percent(ratio)} of {base_name}, limit is {limit * 100:g}%"
-        (passes if _within_limit(ratio, limit) else failures).append(reason)
+        passed = _within_limit(ratio, limit)
+        shown = _actual_percent(ratio, limit, passed)
+        reason = f"{name} is {shown} of {base_name}, limit is {_limit_percent(limit)}"
+        (passes if passed else failures).append(reason)
 
     if failures:
         return ScreenResult("excluded", failures)
@@ -71,8 +73,17 @@ def _within_limit(ratio: float, limit: float) -> bool:
     return ratio < limit
 
 
-def _actual_percent(ratio: float) -> str:
-    # a tiny amount would round to 0.0% and look like it should have passed a zero limit
-    if 0 < ratio < 0.0005:
-        return "under 0.1%"
-    return f"{ratio:.1%}"
+def _actual_percent(ratio: float, limit: float, passed: bool) -> str:
+    shown = f"{ratio:.2%}"
+    # rounding up to the limit would make a pass look like a fail. The limit is rounded
+    # too, because 0.3 * 100 comes out as 30.000000000000004
+    if passed and limit > 0 and float(shown.rstrip("%")) >= round(limit * 100, 6):
+        return f"just under {_limit_percent(limit)}"
+    # a tiny amount would round to 0.00% and look like it should have passed a zero limit
+    if 0 < ratio < 0.00005:
+        return "under 0.01%"
+    return shown
+
+
+def _limit_percent(limit: float) -> str:
+    return f"{limit * 100:g}%"
