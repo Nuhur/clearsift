@@ -24,6 +24,7 @@ class ScreeningConfig:
     mode: str
     fail_closed: bool
     max_data_age_days: int
+    market_cap_max_age_days: int
     ratios: RatioLimits
     excluded_sectors: tuple[str, ...]
 
@@ -53,9 +54,8 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     if screening.get("fail_closed") is not True:
         raise ConfigError("screening.fail_closed must be true")
 
-    max_age = screening.get("max_data_age_days")
-    if isinstance(max_age, bool) or not isinstance(max_age, int) or max_age <= 0:
-        raise ConfigError("screening.max_data_age_days must be a whole number above 0")
+    max_age = _days(screening, "max_data_age_days")
+    market_cap_max_age = _days(screening, "market_cap_max_age_days")
 
     sectors = screening.get("excluded_sectors")
     # an empty list would let every sector through, so treat it as a mistake
@@ -77,6 +77,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             mode="strict",
             fail_closed=True,
             max_data_age_days=max_age,
+            market_cap_max_age_days=market_cap_max_age,
             ratios=RatioLimits(
                 max_debt_to_market_cap=_ratio(ratios, "max_debt_to_market_cap"),
                 max_cash_to_market_cap=_ratio(ratios, "max_cash_to_market_cap"),
@@ -91,6 +92,13 @@ def load_config(path: str | Path = "config.yaml") -> Config:
 def _section(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ConfigError(f"{name} is missing or isn't a section")
+    return value
+
+
+def _days(screening: dict[str, Any], name: str) -> int:
+    value = screening.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"screening.{name} must be a whole number above 0")
     return value
 
 

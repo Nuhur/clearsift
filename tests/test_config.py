@@ -14,6 +14,7 @@ VALID: dict[str, Any] = {
         "mode": "strict",
         "fail_closed": True,
         "max_data_age_days": 120,
+        "market_cap_max_age_days": 1,
         "ratios": {
             "max_debt_to_market_cap": 0.30,
             "max_cash_to_market_cap": 0.30,
@@ -47,6 +48,7 @@ def test_valid_config_values(tmp_path: Path) -> None:
     cfg = load_config(_write(tmp_path, _valid()))
 
     assert cfg.screening.max_data_age_days == 120
+    assert cfg.screening.market_cap_max_age_days == 1
     assert cfg.screening.ratios.max_debt_to_market_cap == 0.30
     assert cfg.screening.ratios.max_cash_to_market_cap == 0.30
     assert cfg.screening.ratios.max_impermissible_income == 0.0
@@ -135,6 +137,23 @@ def test_fail_closed_must_be_true(tmp_path: Path, value: Any) -> None:
 def test_bad_max_data_age_raises(tmp_path: Path, value: Any) -> None:
     data = _valid()
     data["screening"]["max_data_age_days"] = value
+
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+@pytest.mark.parametrize("value", [0, -5, True, 1.5, "1", None])
+def test_bad_market_cap_max_age_raises(tmp_path: Path, value: Any) -> None:
+    data = _valid()
+    data["screening"]["market_cap_max_age_days"] = value
+
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_missing_market_cap_max_age_raises(tmp_path: Path) -> None:
+    data = _valid()
+    del data["screening"]["market_cap_max_age_days"]
 
     with pytest.raises(ConfigError):
         load_config(_write(tmp_path, data))

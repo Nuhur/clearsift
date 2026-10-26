@@ -8,6 +8,8 @@ screening:
   fail_closed: true
   # Days before cached financial data counts as stale.
   max_data_age_days: 120
+  # Market cap moves daily, so it goes stale much sooner than the rest.
+  market_cap_max_age_days: 1
 
   ratios:
     # Interest-bearing debt / market cap must be below this.
