@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from clearsift.config import Mode, ScreeningConfig
 from clearsift.data.cache import get_financials
@@ -18,6 +18,7 @@ class StockVerdict:
     ratios: ScreenResult
     status: Status
     mode: Mode
+    methodology: str
 
     @property
     def passes(self) -> bool:
@@ -39,14 +40,26 @@ def screen_stock(
     get: Callable[..., CompanyFinancials] = get_financials,
 ) -> StockVerdict:
     """Fetch a stock's financials and run every screen on it."""
-    # the cache and the always-exclude list both use uppercase tickers
-    ticker = ticker.strip().upper()
-    financials = get(
-        ticker,
-        max_age_days=config.max_data_age_days,
-        market_cap_max_age_days=config.market_cap_max_age_days,
-    )
+    return screen_financials(_fetch(ticker, config, get), config)
 
+
+def compare_stock(
+    ticker: str,
+    config: ScreeningConfig,
+    get: Callable[..., CompanyFinancials] = get_financials,
+) -> list[StockVerdict]:
+    """Screen a stock under every methodology in the config, one verdict each."""
+    # fetch once, the data is the same whichever standard is judging it
+    financials = _fetch(ticker, config, get)
+    return [
+        screen_financials(financials, replace(config, methodology=method))
+        for method in config.methodologies
+    ]
+
+
+def screen_financials(financials: CompanyFinancials, config: ScreeningConfig) -> StockVerdict:
+    """Run every screen on financials that have already been fetched."""
+    ticker = financials.ticker
     # run both even if the first fails, so every problem shows at once
     business = screen_business(financials, config)
     ratios = screen_ratios(financials, config)
@@ -60,4 +73,17 @@ def screen_stock(
     else:
         status = "compliant"
 
-    return StockVerdict(ticker, financials, business, ratios, status, config.mode)
+    return StockVerdict(
+        ticker, financials, business, ratios, status, config.mode, config.methodology.label
+    )
+
+
+def _fetch(
+    ticker: str, config: ScreeningConfig, get: Callable[..., CompanyFinancials]
+) -> CompanyFinancials:
+    # the cache and the always-exclude list both use uppercase tickers
+    return get(
+        ticker.strip().upper(),
+        max_age_days=config.max_data_age_days,
+        market_cap_max_age_days=config.market_cap_max_age_days,
+    )

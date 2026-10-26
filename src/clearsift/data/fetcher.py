@@ -19,8 +19,9 @@ _FIELD_MAP: dict[str, str] = {
     "total_revenue": "totalRevenue",
 }
 
-# companies report interest income under different rows, so try these in order
+# companies report these under different rows, so try each list in order
 _INTEREST_INCOME_ROWS = ("Interest Income", "Interest Income Non Operating")
+_RECEIVABLES_ROWS = ("Accounts Receivable", "Receivables")
 
 
 def fetch_financials(ticker: str) -> CompanyFinancials:
@@ -44,6 +45,7 @@ def fetch_financials(ticker: str) -> CompanyFinancials:
     kwargs["industry"] = info.get("industry") or None
 
     kwargs.update(_interest_income(yf_ticker))
+    kwargs.update(_balance_sheet(yf_ticker))
 
     return CompanyFinancials(ticker=ticker, **kwargs)  # type: ignore[arg-type]
 
@@ -80,7 +82,7 @@ def _interest_income(yf_ticker: Any) -> dict[str, Any]:
     # newest year that has it. How old is too old is up to the config, not us
     for column, year in zip(columns, years, strict=True):
         year_data = statement[column]
-        income = _interest_income_for_year(year_data)
+        income = _first_non_negative(year_data, _INTEREST_INCOME_ROWS)
         revenue = _number(year_data.get("Total Revenue"))
         if income is not None and revenue is not None:
             result.update(
@@ -90,10 +92,39 @@ def _interest_income(yf_ticker: Any) -> dict[str, Any]:
     return result
 
 
-def _interest_income_for_year(year_data: Any) -> float | None:
-    for row in _INTEREST_INCOME_ROWS:
+def _balance_sheet(yf_ticker: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "total_assets": None,
+        "accounts_receivable": None,
+        "balance_sheet_debt": None,
+        "balance_sheet_cash": None,
+    }
+    # kept apart from info so a broken balance sheet doesn't lose the other fields
+    try:
+        sheet = yf_ticker.balance_sheet
+        if not isinstance(sheet, pd.DataFrame) or sheet.empty:
+            return result
+        # columns are year-end dates, so pick the latest instead of trusting the order.
+        # No falling back to older years, those numbers would be stale
+        latest = sheet[max(sheet.columns)]
+    except Exception:
+        return result
+
+    result["total_assets"] = _first_non_negative(latest, ("Total Assets",))
+    result["accounts_receivable"] = _first_non_negative(latest, _RECEIVABLES_ROWS)
+    result["balance_sheet_debt"] = _first_non_negative(latest, ("Total Debt",))
+    # no falling back to plain "Cash And Cash Equivalents", it leaves out short-term
+    # investments and would make the cash ratio look smaller than it is
+    result["balance_sheet_cash"] = _first_non_negative(
+        latest, ("Cash Cash Equivalents And Short Term Investments",)
+    )
+    return result
+
+
+def _first_non_negative(year_data: Any, rows: tuple[str, ...]) -> float | None:
+    for row in rows:
         value = _number(year_data.get(row))
-        # negative interest income doesn't make sense, so treat it as bad data
+        # none of these can be negative, so a negative number is bad data
         if value is not None and value >= 0:
             return value
     return None

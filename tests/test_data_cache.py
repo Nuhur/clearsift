@@ -25,6 +25,10 @@ def _financials(ticker: str = "MSFT", fetched_at: datetime = NOW, **overrides) -
         "interest_income_revenue": 2e11,
         "interest_income_year": 2025,
         "latest_income_statement_year": 2025,
+        "total_assets": 4e11,
+        "accounts_receivable": 3e10,
+        "balance_sheet_debt": 9e10,
+        "balance_sheet_cash": 6e10,
     }
     values.update(overrides)
     return CompanyFinancials(ticker=ticker, fetched_at=fetched_at, **values)
@@ -288,3 +292,21 @@ def test_save_then_load_keeps_interest_income_year_fields(db_path: Path) -> None
     assert loaded.interest_income_revenue == 3e11
     assert loaded.interest_income_year == 2023
     assert loaded.latest_income_statement_year == 2025
+
+
+def test_save_then_load_keeps_balance_sheet_fields(db_path: Path) -> None:
+    save_financials(_financials(total_assets=5e11, accounts_receivable=None), db_path)
+
+    loaded = _load(db_path)
+    assert loaded is not None
+    assert loaded.total_assets == 5e11
+    assert loaded.accounts_receivable is None
+
+
+def test_save_then_load_keeps_balance_sheet_debt_and_cash(db_path: Path) -> None:
+    save_financials(_financials(balance_sheet_debt=1.2e11, balance_sheet_cash=None), db_path)
+
+    loaded = _load(db_path)
+    assert loaded is not None
+    assert loaded.balance_sheet_debt == 1.2e11
+    assert loaded.balance_sheet_cash is None

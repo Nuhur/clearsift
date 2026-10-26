@@ -15,10 +15,15 @@ CONFIG: dict[str, Any] = {
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
         "max_interest_income_age_years": 3,
-        "ratios": {
-            "max_debt_to_market_cap": 0.30,
-            "max_cash_to_market_cap": 0.30,
-            "max_impermissible_income": 0.05,
+        "methodology": "aaoifi",
+        "methodologies": {
+            "aaoifi": {
+                "denominator": "market_cap",
+                "max_debt": 0.30,
+                "max_cash": 0.30,
+                "max_receivables_and_cash": None,
+                "max_impermissible_income": 0.05,
+            },
         },
         "excluded_sectors": ["alcohol", "tobacco"],
         "always_exclude_tickers": [],
@@ -37,6 +42,10 @@ GOOD: dict[str, Any] = {
     "interest_income_revenue": 500.0,
     "interest_income_year": 2025,
     "latest_income_statement_year": 2025,
+    "total_assets": 2000.0,
+    "accounts_receivable": 100.0,
+    "balance_sheet_debt": 100.0,
+    "balance_sheet_cash": 200.0,
     "interest_income": 10.0,
 }
 
@@ -70,7 +79,7 @@ def test_all_pass_exits_0(config_path: Path, capsys: pytest.CaptureFixture[str])
     assert "MSFT: PASS (compliant)" in out
     assert "ADBE: PASS (compliant)" in out
     assert "  Technology / Software - Infrastructure" in out
-    assert "  - debt is 10.00% of market cap, limit is 30%" in out
+    assert "  - debt is 10.00% of market cap, AAOIFI limit is 30%" in out
 
 
 def test_one_fail_exits_1(config_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -93,7 +102,7 @@ def test_reasons_from_both_screens_shown(
 
     out = capsys.readouterr().out
     assert "  - industry 'Tobacco' falls under excluded group 'tobacco'" in out
-    assert "  - debt is 40.00% of market cap, limit is 30%" in out
+    assert "  - debt is 40.00% of market cap, AAOIFI limit is 30%" in out
 
 
 GROCER = {**GOOD, "sector": "Consumer Defensive", "industry": "Grocery Stores"}
@@ -241,3 +250,100 @@ def test_no_command_is_a_usage_error() -> None:
         main([], get=FakeGet({}))
 
     assert exc.value.code == 2
+
+
+FTSE = {
+    "denominator": "total_assets",
+    "max_debt": 0.33333,
+    "max_cash": 0.33333,
+    "max_receivables_and_cash": 0.50,
+    "max_impermissible_income": 0.05,
+}
+MSCI = {
+    "denominator": "total_assets",
+    "max_debt": 0.3333,
+    "max_cash": 0.3333,
+    "max_receivables_and_cash": 0.3333,
+    "max_impermissible_income": 0.05,
+}
+
+
+@pytest.fixture
+def three_standards(tmp_path: Path) -> Path:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["methodologies"].update({"ftse": FTSE, "msci": MSCI})
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def _compare(config_path: Path, *tickers: str, data: dict[str, dict[str, Any]]) -> int:
+    args = ["screen", *tickers, "--compare", "--config", str(config_path)]
+    return main(args, get=FakeGet(data))
+
+
+def test_compare_shows_every_standard(
+    three_standards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = _compare(three_standards, "MSFT", data={"MSFT": GOOD})
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert out.startswith("MSFT\n  Technology / Software - Infrastructure\n")
+    assert "  AAOIFI: PASS (compliant)" in out
+    assert "  FTSE: PASS (compliant)" in out
+    assert "  MSCI: PASS (compliant)" in out
+    assert "    - debt is 5.00% of total assets, FTSE limit is 33.333%" in out
+    assert out.rstrip().endswith("passes under 3 of 3 standards")
+
+
+def test_compare_counts_mixed_results(
+    three_standards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # info's debt is 40% of market cap, which fails AAOIFI. FTSE and MSCI use the
+    # balance sheet debt (5% of total assets) instead. Receivables plus cash is 40%
+    # of total assets, which fails MSCI only
+    company = {**GOOD, "total_debt": 400.0, "accounts_receivable": 600.0}
+
+    _compare(three_standards, "ABC", data={"ABC": company})
+
+    out = capsys.readouterr().out
+    assert "  AAOIFI: FAIL (excluded)" in out
+    assert "  FTSE: PASS (compliant)" in out
+    assert "  MSCI: FAIL (excluded)" in out
+    assert "passes under 1 of 3 standards" in out
+
+
+def test_compare_exit_code_follows_chosen_methodology(
+    three_standards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # fails AAOIFI (the one picked in the config) but passes FTSE and MSCI
+    company = {**GOOD, "total_debt": 400.0}
+
+    assert _compare(three_standards, "ABC", data={"ABC": company}) == 1
+
+
+def test_compare_shows_business_reasons_once(
+    three_standards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tobacco = {**GOOD, "sector": "Consumer Defensive", "industry": "Tobacco"}
+
+    _compare(three_standards, "MO", data={"MO": tobacco})
+
+    out = capsys.readouterr().out
+    assert out.count("falls under excluded group 'tobacco'") == 1
+    assert "passes under 0 of 3 standards" in out
+
+
+def test_compare_older_interest_income_warning(
+    three_standards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    company = {**GOOD, "interest_income_year": 2023}
+
+    _compare(three_standards, "AAPL", data={"AAPL": company})
+
+    out = capsys.readouterr().out
+    # strict mode in the test config, so doubtful fails everywhere
+    assert "  AAOIFI: FAIL (doubtful)" in out
+    assert "    check by hand: interest income isn't in the latest report" in out
+    assert "passes under 0 of 3 standards" in out

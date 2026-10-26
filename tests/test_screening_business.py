@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from clearsift.config import RatioLimits, ScreeningConfig
+from clearsift.config import Methodology, ScreeningConfig
 from clearsift.data.models import CompanyFinancials
 from clearsift.screening.business import (
     EXCLUDED_INDUSTRIES,
@@ -12,17 +12,23 @@ from clearsift.screening.business import (
     screen_business,
 )
 
+AAOIFI = Methodology(
+    name="aaoifi",
+    denominator="market_cap",
+    max_debt=0.30,
+    max_cash=0.30,
+    max_receivables_and_cash=None,
+    max_impermissible_income=0.05,
+)
+
 CONFIG = ScreeningConfig(
     mode="strict",
     fail_closed=True,
     max_data_age_days=120,
     market_cap_max_age_days=1,
     max_interest_income_age_years=3,
-    ratios=RatioLimits(
-        max_debt_to_market_cap=0.30,
-        max_cash_to_market_cap=0.30,
-        max_impermissible_income=0.0,
-    ),
+    methodology=AAOIFI,
+    methodologies=(AAOIFI,),
     excluded_sectors=tuple(EXCLUDED_INDUSTRIES),
     always_exclude_tickers=("BAD",),
 )

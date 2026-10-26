@@ -16,14 +16,37 @@ screening:
   # as long as it's no more than this many years before the latest report.
   max_interest_income_age_years: 3
 
-  ratios:
-    # Interest-bearing debt / market cap must be below this.
-    max_debt_to_market_cap: 0.30
-    # Cash + interest-bearing investments / market cap must be below this.
-    max_cash_to_market_cap: 0.30
-    # Impermissible income / total revenue. 0.05 is the AAOIFI limit.
-    # Set to 0.0 for zero tolerance (then only exactly 0 passes).
-    max_impermissible_income: 0.05
+  # Which standard to screen with. Must be one of the names under methodologies.
+  # `clearsift screen --compare` runs all of them.
+  methodology: aaoifi
+
+  # Limits for each standard. Every ratio must be strictly below its limit.
+  # A limit of 0.0 means zero tolerance (only exactly 0 passes).
+  #   denominator: what debt, cash and receivables are divided by
+  #                (market_cap or total_assets).
+  #   max_debt: interest-bearing debt.
+  #   max_cash: cash + interest-bearing investments.
+  #   max_receivables_and_cash: accounts receivable + cash. null = not checked.
+  #   max_impermissible_income: interest income / revenue from the same year.
+  methodologies:
+    aaoifi:
+      denominator: market_cap
+      max_debt: 0.30
+      max_cash: 0.30
+      max_receivables_and_cash: null
+      max_impermissible_income: 0.05
+    ftse:
+      denominator: total_assets
+      max_debt: 0.33333
+      max_cash: 0.33333
+      max_receivables_and_cash: 0.50
+      max_impermissible_income: 0.05
+    msci:
+      denominator: total_assets
+      max_debt: 0.3333
+      max_cash: 0.3333
+      max_receivables_and_cash: 0.3333
+      max_impermissible_income: 0.05
 
   excluded_sectors:
     - conventional_banking

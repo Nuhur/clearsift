@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Literal
 
-from clearsift.config import ScreeningConfig
+from clearsift.config import Denominator, Methodology, ScreeningConfig
 from clearsift.data.models import CompanyFinancials
 from clearsift.screening.business import ScreenResult
 
@@ -11,24 +11,44 @@ from clearsift.screening.business import ScreenResult
 Outcome = Literal["pass", "doubt", "fail"]
 Check = tuple[Outcome, str]
 
+_DENOMINATOR_NAMES: dict[Denominator, str] = {
+    "market_cap": "market cap",
+    "total_assets": "total assets",
+}
+
 
 def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> ScreenResult:
-    """Check a company's debt, cash and interest income against the limits in the config."""
-    limits = config.ratios
+    """Check a company's ratios against the limits of the methodology in the config."""
+    method = config.methodology
     checks: list[Check] = []
 
+    base_name = _DENOMINATOR_NAMES[method.denominator]
     # fail closed: a missing or non-positive base means none of its ratios can be trusted
-    market_cap = _base(financials.market_cap, "market cap", checks)
-    checks += _ratio(
-        "debt", financials.total_debt, market_cap, "market cap", limits.max_debt_to_market_cap
-    )
-    checks += _ratio(
-        "cash",
-        financials.cash_and_short_term_investments,
-        market_cap,
-        "market cap",
-        limits.max_cash_to_market_cap,
-    )
+    base = _base(getattr(financials, method.denominator), base_name, checks)
+    # total assets come from the annual balance sheet, so take debt and cash from the same
+    # sheet. Mixing in info's newer figures would compare numbers from different dates
+    if method.denominator == "total_assets":
+        debt, cash = financials.balance_sheet_debt, financials.balance_sheet_cash
+    else:
+        debt, cash = financials.total_debt, financials.cash_and_short_term_investments
+    checks += _ratio("debt", debt, base, base_name, method.max_debt, method)
+    checks += _ratio("cash", cash, base, base_name, method.max_cash, method)
+
+    if method.max_receivables_and_cash is not None:
+        receivables = financials.accounts_receivable
+        if receivables is None:
+            checks.append(("fail", "accounts receivable is missing"))
+        # the cash check has already said if cash is missing, so only add this if both are there
+        elif cash is not None:
+            checks += _ratio(
+                "receivables plus cash",
+                receivables + cash,
+                base,
+                base_name,
+                method.max_receivables_and_cash,
+                method,
+            )
+
     checks += _interest_income(financials, config)
 
     outcomes = {outcome for outcome, _ in checks}
@@ -58,7 +78,8 @@ def _interest_income(financials: CompanyFinancials, config: ScreeningConfig) -> 
         financials.interest_income,
         revenue,
         "revenue" + note,
-        config.ratios.max_impermissible_income,
+        config.methodology.max_impermissible_income,
+        config.methodology,
     )
     # an older year is the best we've got, but it might not reflect the company today
     if note:
@@ -67,7 +88,12 @@ def _interest_income(financials: CompanyFinancials, config: ScreeningConfig) -> 
 
 
 def _ratio(
-    name: str, value: float | None, base: float | None, base_name: str, limit: float
+    name: str,
+    value: float | None,
+    base: float | None,
+    base_name: str,
+    limit: float,
+    method: Methodology,
 ) -> list[Check]:
     if value is None or not math.isfinite(value):
         return [("fail", f"{name} is missing")]
@@ -81,7 +107,7 @@ def _ratio(
     ratio = value / base
     passed = _within_limit(ratio, limit)
     shown = _actual_percent(ratio, limit, passed)
-    reason = f"{name} is {shown} of {base_name}, limit is {_limit_percent(limit)}"
+    reason = f"{name} is {shown} of {base_name}, {method.label} limit is {_limit_percent(limit)}"
     return [("pass" if passed else "fail", reason)]
 
 

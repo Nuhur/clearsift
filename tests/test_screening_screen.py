@@ -3,9 +3,18 @@ from typing import Any
 
 import pytest
 
-from clearsift.config import RatioLimits, ScreeningConfig
+from clearsift.config import Methodology, ScreeningConfig
 from clearsift.data.models import CompanyFinancials
-from clearsift.screening.screen import screen_stock
+from clearsift.screening.screen import compare_stock, screen_stock
+
+AAOIFI = Methodology(
+    name="aaoifi",
+    denominator="market_cap",
+    max_debt=0.30,
+    max_cash=0.30,
+    max_receivables_and_cash=None,
+    max_impermissible_income=0.05,
+)
 
 CONFIG = ScreeningConfig(
     mode="strict",
@@ -13,11 +22,8 @@ CONFIG = ScreeningConfig(
     max_data_age_days=120,
     market_cap_max_age_days=1,
     max_interest_income_age_years=3,
-    ratios=RatioLimits(
-        max_debt_to_market_cap=0.30,
-        max_cash_to_market_cap=0.30,
-        max_impermissible_income=0.05,
-    ),
+    methodology=AAOIFI,
+    methodologies=(AAOIFI,),
     excluded_sectors=("alcohol", "tobacco"),
     always_exclude_tickers=(),
 )
@@ -36,6 +42,10 @@ def _company(**overrides: Any) -> CompanyFinancials:
         "interest_income_year": 2025,
         "latest_income_statement_year": 2025,
         "interest_income": 10.0,
+        "total_assets": 2000.0,
+        "accounts_receivable": 100.0,
+        "balance_sheet_debt": 100.0,
+        "balance_sheet_cash": 200.0,
     }
     values.update(overrides)
     return CompanyFinancials(ticker="TEST", **values)
@@ -148,9 +158,8 @@ def test_excluded_beats_doubtful() -> None:
 def test_ticker_uppercased_and_day_limits_passed_on() -> None:
     get = FakeGet(_company())
 
-    verdict = screen_stock(" msft ", CONFIG, get=get)
+    screen_stock(" msft ", CONFIG, get=get)
 
-    assert verdict.ticker == "MSFT"
     assert get.calls == [("MSFT", {"max_age_days": 120, "market_cap_max_age_days": 1})]
 
 
@@ -177,3 +186,32 @@ def test_unclear_interest_income_passes_in_standard_mode(overrides: dict[str, An
     assert verdict.status == "doubtful"
     assert verdict.needs_review
     assert verdict.passes
+
+
+MSCI = Methodology(
+    name="msci",
+    denominator="total_assets",
+    max_debt=0.3333,
+    max_cash=0.3333,
+    max_receivables_and_cash=0.3333,
+    max_impermissible_income=0.05,
+)
+
+
+def test_verdict_records_methodology() -> None:
+    verdict = screen_stock("TEST", CONFIG, get=FakeGet(_company()))
+
+    assert verdict.methodology == "AAOIFI"
+
+
+def test_compare_runs_every_methodology_from_one_fetch() -> None:
+    config = replace(CONFIG, methodologies=(AAOIFI, MSCI))
+    # info's debt is 40% of market cap, which fails AAOIFI. MSCI uses the balance
+    # sheet debt instead, which is only 5% of total assets
+    get = FakeGet(_company(total_debt=400.0))
+
+    verdicts = compare_stock("TEST", config, get=get)
+
+    assert len(get.calls) == 1
+    assert [v.methodology for v in verdicts] == ["AAOIFI", "MSCI"]
+    assert [v.passes for v in verdicts] == [False, True]

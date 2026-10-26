@@ -223,3 +223,90 @@ def test_broken_statement_keeps_other_fields() -> None:
     assert cf.latest_income_statement_year is None
     assert cf.market_cap == 3e12
     assert cf.sector == "Technology"
+
+
+def _fetch_with_balance_sheet(sheet: object) -> CompanyFinancials:
+    mock = _mock_ticker(FULL_INFO)
+    mock.balance_sheet = sheet
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=mock):
+        return fetch_financials("MSFT")
+
+
+def test_balance_sheet_fields() -> None:
+    sheet = _statement(
+        {"Total Assets": [3.6e11, 3.5e11], "Accounts Receivable": [3e10, 2e10]},
+        ["2024-06-30", "2025-06-30"],
+    )
+
+    cf = _fetch_with_balance_sheet(sheet)
+
+    assert cf.total_assets == 3.5e11
+    assert cf.accounts_receivable == 2e10
+
+
+def test_receivables_falls_back_to_receivables_row() -> None:
+    sheet = _statement(
+        {"Total Assets": [3.5e11], "Accounts Receivable": [NAN], "Receivables": [4e10]},
+        ["2025-06-30"],
+    )
+
+    assert _fetch_with_balance_sheet(sheet).accounts_receivable == 4e10
+
+
+def test_balance_sheet_does_not_use_older_years() -> None:
+    sheet = _statement(
+        {"Total Assets": [3.5e11, NAN], "Accounts Receivable": [3e10, NAN]},
+        ["2024-06-30", "2025-06-30"],
+    )
+
+    cf = _fetch_with_balance_sheet(sheet)
+
+    assert cf.total_assets is None
+    assert cf.accounts_receivable is None
+
+
+def test_negative_balance_sheet_values_become_none() -> None:
+    sheet = _statement({"Total Assets": [-1.0], "Accounts Receivable": [-5.0]}, ["2025-06-30"])
+
+    cf = _fetch_with_balance_sheet(sheet)
+
+    assert cf.total_assets is None
+    assert cf.accounts_receivable is None
+
+
+def test_broken_balance_sheet_keeps_other_fields() -> None:
+    mock = _mock_ticker(FULL_INFO)
+    type(mock).balance_sheet = PropertyMock(side_effect=Exception("network error"))
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=mock):
+        cf = fetch_financials("MSFT")
+
+    assert cf.total_assets is None
+    assert cf.market_cap == 3e12
+
+
+def test_balance_sheet_debt_and_cash_from_same_year_as_total_assets() -> None:
+    sheet = _statement(
+        {
+            "Total Assets": [3.6e11, 3.5e11],
+            "Total Debt": [1.1e11, 1.0e11],
+            "Cash Cash Equivalents And Short Term Investments": [7e10, 6.5e10],
+        },
+        ["2024-09-30", "2025-09-30"],
+    )
+
+    cf = _fetch_with_balance_sheet(sheet)
+
+    assert cf.total_assets == 3.5e11
+    assert cf.balance_sheet_debt == 1.0e11
+    assert cf.balance_sheet_cash == 6.5e10
+    # info's figures are kept separately for the market-cap standards
+    assert cf.total_debt == 5e10
+    assert cf.cash_and_short_term_investments == 1e11
+
+
+def test_balance_sheet_cash_does_not_fall_back_to_cash_only_row() -> None:
+    sheet = _statement(
+        {"Total Assets": [3.5e11], "Cash And Cash Equivalents": [3e10]}, ["2025-09-30"]
+    )
+
+    assert _fetch_with_balance_sheet(sheet).balance_sheet_cash is None

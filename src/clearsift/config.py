@@ -8,6 +8,7 @@ from typing import Any, Literal, get_args
 import yaml
 
 Mode = Literal["strict", "standard"]
+Denominator = Literal["market_cap", "total_assets"]
 
 
 class ConfigError(ValueError):
@@ -15,10 +16,18 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
-class RatioLimits:
-    max_debt_to_market_cap: float
-    max_cash_to_market_cap: float
+class Methodology:
+    name: str
+    denominator: Denominator
+    max_debt: float
+    max_cash: float
+    max_receivables_and_cash: float | None
     max_impermissible_income: float
+
+    @property
+    def label(self) -> str:
+        """The name as it should appear in reasons, e.g. AAOIFI."""
+        return self.name.upper()
 
 
 @dataclass(frozen=True)
@@ -28,7 +37,9 @@ class ScreeningConfig:
     max_data_age_days: int
     market_cap_max_age_days: int
     max_interest_income_age_years: int
-    ratios: RatioLimits
+    # the one used for screening, plus every one in the config for comparing
+    methodology: Methodology
+    methodologies: tuple[Methodology, ...]
     excluded_sectors: tuple[str, ...]
     always_exclude_tickers: tuple[str, ...]
 
@@ -49,7 +60,6 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     # fail closed: a broken config should stop everything, not fall back to defaults
     root = _section(raw, "config")
     screening = _section(root.get("screening"), "screening")
-    ratios = _section(screening.get("ratios"), "screening.ratios")
 
     # no fallback: quietly picking a mode could let in stocks you meant to keep out
     mode = screening.get("mode")
@@ -67,6 +77,15 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             "screening.market_cap_max_age_days can't be bigger than max_data_age_days"
         )
     interest_income_max_age = _days(screening, "max_interest_income_age_years")
+
+    raw_methodologies = _section(screening.get("methodologies"), "screening.methodologies")
+    if not raw_methodologies:
+        raise ConfigError("screening.methodologies must list at least one standard")
+    methodologies = tuple(_methodology(name, value) for name, value in raw_methodologies.items())
+    chosen = screening.get("methodology")
+    by_name = {m.name: m for m in methodologies}
+    if chosen not in by_name:
+        raise ConfigError(f"screening.methodology must be one of: {', '.join(by_name)}")
 
     sectors = screening.get("excluded_sectors")
     # an empty list would let every sector through, so treat it as a mistake
@@ -98,11 +117,8 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             max_data_age_days=max_age,
             market_cap_max_age_days=market_cap_max_age,
             max_interest_income_age_years=interest_income_max_age,
-            ratios=RatioLimits(
-                max_debt_to_market_cap=_ratio(ratios, "max_debt_to_market_cap"),
-                max_cash_to_market_cap=_ratio(ratios, "max_cash_to_market_cap"),
-                max_impermissible_income=_ratio(ratios, "max_impermissible_income"),
-            ),
+            methodology=by_name[chosen],
+            methodologies=methodologies,
             excluded_sectors=tuple(s.strip() for s in sectors),
             always_exclude_tickers=tuple(tickers),
         ),
@@ -123,11 +139,38 @@ def _days(screening: dict[str, Any], name: str) -> int:
     return value
 
 
-def _ratio(ratios: dict[str, Any], name: str) -> float:
-    value = ratios.get(name)
+def _methodology(name: Any, value: Any) -> Methodology:
+    if not isinstance(name, str) or not name.strip():
+        raise ConfigError("screening.methodologies names must be text")
+    path = f"screening.methodologies.{name}"
+    section = _section(value, path)
+
+    denominator = section.get("denominator")
+    if denominator not in get_args(Denominator):
+        raise ConfigError(f"{path}.denominator must be 'market_cap' or 'total_assets'")
+
+    # null switches the check off, but leaving the key out is more likely a mistake
+    if "max_receivables_and_cash" not in section:
+        raise ConfigError(f"{path}.max_receivables_and_cash is missing (use null to skip it)")
+    receivables = section["max_receivables_and_cash"]
+
+    return Methodology(
+        name=name,
+        denominator=denominator,
+        max_debt=_ratio(section, "max_debt", path),
+        max_cash=_ratio(section, "max_cash", path),
+        max_receivables_and_cash=(
+            None if receivables is None else _ratio(section, "max_receivables_and_cash", path)
+        ),
+        max_impermissible_income=_ratio(section, "max_impermissible_income", path),
+    )
+
+
+def _ratio(section: dict[str, Any], name: str, path: str) -> float:
+    value = section.get(name)
     # Python counts True and False as numbers, so skip those
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ConfigError(f"screening.ratios.{name} must be a number")
+        raise ConfigError(f"{path}.{name} must be a number")
     if not math.isfinite(value) or not 0 <= value <= 1:
-        raise ConfigError(f"screening.ratios.{name} must be between 0 and 1")
+        raise ConfigError(f"{path}.{name} must be between 0 and 1")
     return float(value)
