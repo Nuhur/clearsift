@@ -26,6 +26,7 @@ CONFIG = ScreeningConfig(
     methodologies=(AAOIFI,),
     excluded_sectors=("alcohol",),
     always_exclude_tickers=(),
+    approved_funds=(),
 )
 
 

@@ -44,6 +44,10 @@ def fetch_financials(ticker: str) -> CompanyFinancials:
     # sector and industry are text, so the line above wrongly set them to None
     kwargs["sector"] = info.get("sector") or None
     kwargs["industry"] = info.get("industry") or None
+    quote_type = info.get("quoteType")
+    kwargs["quote_type"] = (
+        quote_type.strip().upper() if isinstance(quote_type, str) and quote_type.strip() else None
+    )
 
     kwargs.update(_interest_income(yf_ticker))
     kwargs.update(_balance_sheet(yf_ticker))

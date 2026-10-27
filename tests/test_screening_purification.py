@@ -29,6 +29,7 @@ STRICT = ScreeningConfig(
     methodologies=(AAOIFI,),
     excluded_sectors=("alcohol", "tobacco"),
     always_exclude_tickers=(),
+    approved_funds=(),
 )
 STANDARD = replace(STRICT, mode="standard")
 
@@ -87,6 +88,16 @@ def test_ratio_none_for_doubtful_stock_in_strict_mode() -> None:
     verdict = _verdict(interest_income_year=2023)
 
     assert verdict.status == "doubtful"
+    assert purification_ratio(verdict) is None
+
+
+def test_ratio_none_for_approved_fund() -> None:
+    config = replace(STRICT, approved_funds=("IGDA.L",))
+    fund = CompanyFinancials(ticker="IGDA.L", quote_type="ETF")
+
+    verdict = screen_financials(fund, config)
+
+    assert verdict.passes
     assert purification_ratio(verdict) is None
 
 

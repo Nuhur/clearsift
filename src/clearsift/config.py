@@ -42,6 +42,8 @@ class ScreeningConfig:
     methodologies: tuple[Methodology, ...]
     excluded_sectors: tuple[str, ...]
     always_exclude_tickers: tuple[str, ...]
+    # Sharia-certified ETFs and funds you've checked yourself
+    approved_funds: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -96,13 +98,9 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     ):
         raise ConfigError("screening.excluded_sectors must be a non-empty list of names")
 
-    tickers = screening.get("always_exclude_tickers")
-    # an empty list is fine here, it just means nothing extra gets excluded.
-    # Lowercase or padded tickers would silently never match, so refuse them
-    if not isinstance(tickers, list) or not all(
-        isinstance(t, str) and t and t == t.strip().upper() for t in tickers
-    ):
-        raise ConfigError("screening.always_exclude_tickers must be a list of uppercase tickers")
+    # an empty list is fine for both, it just means nothing extra gets excluded or approved
+    always_exclude = _tickers(screening, "always_exclude_tickers")
+    approved_funds = _tickers(screening, "approved_funds")
 
     # the benchmark isn't needed for screening, so it can be left out for now
     benchmark = _section(root.get("benchmark") or {}, "benchmark")
@@ -120,7 +118,8 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             methodology=by_name[chosen],
             methodologies=methodologies,
             excluded_sectors=tuple(s.strip() for s in sectors),
-            always_exclude_tickers=tuple(tickers),
+            always_exclude_tickers=always_exclude,
+            approved_funds=approved_funds,
         ),
         benchmark_ticker=ticker.strip() if ticker else None,
     )
@@ -130,6 +129,16 @@ def _section(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ConfigError(f"{name} is missing or isn't a section")
     return value
+
+
+def _tickers(screening: dict[str, Any], name: str) -> tuple[str, ...]:
+    tickers = screening.get(name)
+    # lowercase or padded tickers would silently never match, so refuse them
+    if not isinstance(tickers, list) or not all(
+        isinstance(t, str) and t and t == t.strip().upper() for t in tickers
+    ):
+        raise ConfigError(f"screening.{name} must be a list of uppercase tickers")
+    return tuple(tickers)
 
 
 def _days(screening: dict[str, Any], name: str) -> int:

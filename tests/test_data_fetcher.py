@@ -74,6 +74,24 @@ def test_empty_string_sector_becomes_none() -> None:
     assert cf.sector is None
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("ETF", "ETF"), ("etf ", "ETF"), ("EQUITY", "EQUITY"), ("", None), ("  ", None), (3, None)],
+)
+def test_quote_type(raw: object, expected: str | None) -> None:
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=_mock_ticker({"quoteType": raw})):
+        cf = fetch_financials("IGDA.L")
+
+    assert cf.quote_type == expected
+
+
+def test_missing_quote_type_becomes_none() -> None:
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=_mock_ticker(FULL_INFO)):
+        cf = fetch_financials("MSFT")
+
+    assert cf.quote_type is None
+
+
 def test_nan_and_infinity_become_none() -> None:
     info = {"marketCap": float("nan"), "totalDebt": float("inf")}
     with patch("clearsift.data.fetcher.yf.Ticker", return_value=_mock_ticker(info)):

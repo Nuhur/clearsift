@@ -31,6 +31,7 @@ CONFIG = ScreeningConfig(
     methodologies=(AAOIFI,),
     excluded_sectors=tuple(EXCLUDED_INDUSTRIES),
     always_exclude_tickers=("BAD",),
+    approved_funds=(),
 )
 
 
@@ -153,6 +154,17 @@ def test_unmapped_config_group_raises() -> None:
 
     with pytest.raises(ValueError, match="alchohol"):
         screen_business(_company(), config)
+
+
+def test_check_excluded_sectors_names_every_unmapped_group() -> None:
+    config = replace(CONFIG, excluded_sectors=("alcohol", "alchohol", "tobaco"))
+
+    with pytest.raises(ValueError, match="alchohol, tobaco"):
+        check_excluded_sectors(config)
+
+
+def test_check_excluded_sectors_passes_when_all_mapped() -> None:
+    check_excluded_sectors(replace(CONFIG, excluded_sectors=tuple(EXCLUDED_INDUSTRIES)))
 
 
 def test_every_mapped_label_is_a_known_industry() -> None:

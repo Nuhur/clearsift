@@ -30,6 +30,7 @@ CONFIG: dict[str, Any] = {
         },
         "excluded_sectors": ["alcohol", "tobacco"],
         "always_exclude_tickers": [],
+        "approved_funds": [],
     },
     "benchmark": {"ticker": None},
 }
@@ -256,6 +257,75 @@ def test_no_purification_line_for_failed_stock(
     _run(config_path, "ABC", data={"ABC": {**GOOD, "total_debt": 400.0}})
 
     assert "purif" not in capsys.readouterr().out
+
+
+ETF: dict[str, Any] = {"quote_type": "ETF"}
+FUND_REASON = "  - Sharia-certified fund, on your approved list"
+FUND_PURIFICATION = "  purification: check the fund's own reports"
+
+
+def _funds_config(tmp_path: Path, mode: str = "strict") -> Path:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["mode"] = mode
+    data["screening"]["approved_funds"] = ["IGDA.L", "ISUS.L", "ISDE.L"]
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def test_approved_funds_pass(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    data = {"IGDA.L": ETF, "ISUS.L": ETF, "ISDE.L": ETF}
+
+    code = _run(_funds_config(tmp_path), "IGDA.L", "ISUS.L", "ISDE.L", data=data)
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert out.count(FUND_REASON) == 3
+    assert out.count(FUND_PURIFICATION) == 3
+    assert "IGDA.L: PASS (compliant)" in out
+    assert "check by hand" not in out
+
+
+def test_unapproved_fund_fails_in_strict_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = _run(_funds_config(tmp_path), "OTHER.L", data={"OTHER.L": ETF})
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "OTHER.L: FAIL (doubtful)" in out
+    assert "  - fund: check its Sharia certification" in out
+    # the industry warning is about company labels, it doesn't fit a fund
+    assert "industry label" not in out
+    assert "purification" not in out
+
+
+def test_unapproved_fund_passes_in_standard_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = _run(_funds_config(tmp_path, "standard"), "OTHER.L", data={"OTHER.L": ETF})
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "OTHER.L: PASS (doubtful)" in out
+    assert FUND_PURIFICATION in out
+    assert "industry label" not in out
+
+
+def test_compare_approved_fund(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["approved_funds"] = ["IGDA.L"]
+    data["screening"]["methodologies"].update({"ftse": FTSE, "msci": MSCI})
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    code = _compare(path, "IGDA.L", data={"IGDA.L": ETF})
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert out.count(FUND_REASON) == 1
+    assert out.count(FUND_PURIFICATION) == 1
+    assert "passes under 3 of 3 standards" in out
 
 
 def test_missing_config_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

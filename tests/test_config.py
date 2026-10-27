@@ -28,6 +28,7 @@ VALID: dict[str, Any] = {
         },
         "excluded_sectors": ["sector_a", "sector_b"],
         "always_exclude_tickers": ["ABC", "VOD.L"],
+        "approved_funds": ["IGDA.L"],
     },
     "benchmark": {"ticker": None},
 }
@@ -83,7 +84,12 @@ def test_valid_config_values(tmp_path: Path) -> None:
     assert cfg.screening.methodologies == (method,)
     assert cfg.screening.excluded_sectors == ("sector_a", "sector_b")
     assert cfg.screening.always_exclude_tickers == ("ABC", "VOD.L")
+    assert cfg.screening.approved_funds == ("IGDA.L",)
     assert cfg.benchmark_ticker is None
+
+
+def test_repo_config_approved_funds() -> None:
+    assert load_config(REPO_CONFIG).screening.approved_funds == ("IGDA.L", "ISUS.L", "ISDE.L")
 
 
 def test_benchmark_ticker_set(tmp_path: Path) -> None:
@@ -335,6 +341,32 @@ def test_missing_always_exclude_tickers_raises(tmp_path: Path) -> None:
     del data["screening"]["always_exclude_tickers"]
 
     with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_empty_approved_funds_is_fine(tmp_path: Path) -> None:
+    data = _valid()
+    data["screening"]["approved_funds"] = []
+
+    assert load_config(_write(tmp_path, data)).screening.approved_funds == ()
+
+
+@pytest.mark.parametrize(
+    "value", [None, "IGDA.L", ["igda.l"], ["IGDA.L", ""], [" IGDA.L"], ["IGDA.L", 3]]
+)
+def test_bad_approved_funds_raises(tmp_path: Path, value: Any) -> None:
+    data = _valid()
+    data["screening"]["approved_funds"] = value
+
+    with pytest.raises(ConfigError, match="approved_funds"):
+        load_config(_write(tmp_path, data))
+
+
+def test_missing_approved_funds_raises(tmp_path: Path) -> None:
+    data = _valid()
+    del data["screening"]["approved_funds"]
+
+    with pytest.raises(ConfigError, match="approved_funds"):
         load_config(_write(tmp_path, data))
 
 

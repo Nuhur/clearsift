@@ -10,6 +10,7 @@ from functools import partial
 from clearsift.config import ConfigError, load_config
 from clearsift.data.cache import get_financials
 from clearsift.data.models import CompanyFinancials
+from clearsift.screening.business import check_excluded_sectors
 from clearsift.screening.purification import purification_ratio
 from clearsift.screening.screen import StockVerdict, compare_stock, screen_stock
 
@@ -40,6 +41,12 @@ def main(
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
+    # funds skip the business screen, so a funds-only run would never hit this otherwise
+    try:
+        check_excluded_sectors(config.screening)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     all_pass = True
     for i, ticker in enumerate(args.tickers):
@@ -69,7 +76,8 @@ def main(
 def format_verdict(verdict: StockVerdict) -> str:
     """Turn a stock's verdict into a short block of text."""
     lines = [f"{verdict.ticker}: {_pass_fail(verdict)}", *_company_lines(verdict)]
-    if verdict.needs_review and verdict.business.status == "doubtful":
+    # a fund's own reason already says what to check, the industry warning doesn't fit
+    if verdict.needs_review and verdict.business.status == "doubtful" and not verdict.is_fund:
         lines.append(_BUSINESS_WARNING)
     if verdict.needs_review and verdict.ratios.status == "doubtful":
         lines.append(_INTEREST_WARNING)
@@ -84,7 +92,7 @@ def format_comparison(verdicts: list[StockVerdict]) -> str:
     # the business screen and the data are the same for every methodology
     first = verdicts[0]
     lines = [first.ticker, *_company_lines(first)]
-    if first.business.status == "doubtful":
+    if first.business.status == "doubtful" and not first.is_fund:
         lines.append(_BUSINESS_WARNING)
     lines += [f"  - {reason}" for reason in first.business.reasons]
     # the ratio is the same under every standard, so show it once
@@ -108,6 +116,8 @@ _INTEREST_WARNING = "  check by hand: interest income isn't in the latest report
 
 
 def _purification_line(verdict: StockVerdict) -> str:
+    if verdict.is_fund:
+        return "  purification: check the fund's own reports"
     ratio = purification_ratio(verdict)
     # the stock passed, so any other missing number would have failed it. That leaves
     # interest income not being disclosed, which standard mode lets through
@@ -128,6 +138,9 @@ def _pass_fail(verdict: StockVerdict) -> str:
 
 def _company_lines(verdict: StockVerdict) -> list[str]:
     financials = verdict.financials
+    if financials.is_fund:
+        # funds have no sector or industry, so say what kind of fund it is instead
+        return [f"  fund ({financials.quote_type})"]
     lines = [f"  {financials.sector or 'unknown'} / {financials.industry or 'unknown'}"]
     # an empty fetch usually means yfinance fell over, not that the company is bad
     if _has_no_data(financials):

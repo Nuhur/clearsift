@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from clearsift.data.models import CompanyFinancials
 
 
@@ -17,6 +19,14 @@ def test_optional_fields_default_none() -> None:
     assert cf.cash_and_short_term_investments is None
     assert cf.total_revenue is None
     assert cf.interest_income is None
+
+
+@pytest.mark.parametrize(
+    ("quote_type", "is_fund"),
+    [("ETF", True), ("MUTUALFUND", True), ("EQUITY", False), (None, False)],
+)
+def test_is_fund(quote_type: str | None, is_fund: bool) -> None:
+    assert CompanyFinancials(ticker="X", quote_type=quote_type).is_fund is is_fund
 
 
 def test_fetched_at_defaults_to_utc_now() -> None:

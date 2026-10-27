@@ -29,6 +29,11 @@ class StockVerdict:
         return self.status == "doubtful" and self.mode == "standard"
 
     @property
+    def is_fund(self) -> bool:
+        """Whether this was screened as a fund rather than a company."""
+        return self.financials.is_fund
+
+    @property
     def needs_review(self) -> bool:
         """Whether someone should check this business by hand."""
         return self.status == "doubtful"
@@ -60,9 +65,14 @@ def compare_stock(
 def screen_financials(financials: CompanyFinancials, config: ScreeningConfig) -> StockVerdict:
     """Run every screen on financials that have already been fetched."""
     ticker = financials.ticker
-    # run both even if the first fails, so every problem shows at once
-    business = screen_business(financials, config)
-    ratios = screen_ratios(financials, config)
+    if financials.is_fund:
+        business = screen_fund(financials, config)
+        # a fund has no sector or balance sheet of its own, so there are no ratios to check
+        ratios = ScreenResult("compliant", [])
+    else:
+        # run both even if the first fails, so every problem shows at once
+        business = screen_business(financials, config)
+        ratios = screen_ratios(financials, config)
 
     statuses = {business.status, ratios.status}
     status: Status
@@ -76,6 +86,17 @@ def screen_financials(financials: CompanyFinancials, config: ScreeningConfig) ->
     return StockVerdict(
         ticker, financials, business, ratios, status, config.mode, config.methodology.label
     )
+
+
+def screen_fund(financials: CompanyFinancials, config: ScreeningConfig) -> ScreenResult:
+    """Check an ETF or fund against your always-exclude and approved lists."""
+    ticker = financials.ticker.strip().upper()
+    if ticker in config.always_exclude_tickers:
+        return ScreenResult("excluded", [f"{ticker} is on the always-exclude list"])
+    if ticker in config.approved_funds:
+        return ScreenResult("compliant", ["Sharia-certified fund, on your approved list"])
+    # we can't see inside a fund, so only your own check can approve it
+    return ScreenResult("doubtful", ["fund: check its Sharia certification"])
 
 
 def _fetch(

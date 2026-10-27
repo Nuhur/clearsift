@@ -270,12 +270,18 @@ KNOWN_INDUSTRIES_BY_SECTOR: dict[str, frozenset[str]] = {
 }
 
 
-def screen_business(financials: CompanyFinancials, config: ScreeningConfig) -> ScreenResult:
-    """Check whether a company's line of business is allowed."""
+def check_excluded_sectors(config: ScreeningConfig) -> None:
+    """Raise ValueError if any excluded sector in the config has no industry mapping."""
     unmapped = [name for name in config.excluded_sectors if name not in EXCLUDED_INDUSTRIES]
     # a typo in config.yaml would quietly let a whole group through, so stop here
     if unmapped:
         raise ValueError(f"no industry mapping for excluded sectors: {', '.join(unmapped)}")
+
+
+def screen_business(financials: CompanyFinancials, config: ScreeningConfig) -> ScreenResult:
+    """Check whether a company's line of business is allowed."""
+    # the CLI checks this up front too, but anything else calling in still needs stopping
+    check_excluded_sectors(config)
 
     ticker = financials.ticker.strip().upper()
     if ticker in config.always_exclude_tickers:

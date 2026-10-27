@@ -2,6 +2,7 @@ import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -233,6 +234,66 @@ def test_get_caches_partial_result(db_path: Path) -> None:
     _get(db_path, fetch)
 
     assert _load(db_path) == partial
+
+
+def test_save_then_load_keeps_quote_type(db_path: Path) -> None:
+    save_financials(_financials(quote_type="ETF"), db_path)
+
+    loaded = _load(db_path)
+    assert loaded is not None
+    assert loaded.quote_type == "ETF"
+
+
+def _fund(fetched_at: datetime = NOW, **overrides: Any) -> CompanyFinancials:
+    # what yfinance gives for an ETF: a quote type, but no sector or market cap
+    return CompanyFinancials(ticker="IGDA.L", quote_type="ETF", fetched_at=fetched_at, **overrides)
+
+
+def _get_fund(db_path: Path, fetch: FakeFetch) -> CompanyFinancials:
+    return get_financials(
+        "IGDA.L",
+        max_age_days=MAX_AGE,
+        market_cap_max_age_days=MARKET_CAP_MAX_AGE,
+        db_path=db_path,
+        fetch=fetch,
+        now=NOW,
+    )
+
+
+def test_get_reuses_cached_fund_without_market_cap(db_path: Path) -> None:
+    cached = _fund(fetched_at=NOW - timedelta(days=30))
+    save_financials(cached, db_path)
+    fetch = FakeFetch(_fund())
+
+    assert _get_fund(db_path, fetch) == cached
+    assert fetch.calls == []
+
+
+def test_get_reuses_cached_fund_when_market_cap_is_old(db_path: Path) -> None:
+    save_financials(_fund(fetched_at=NOW - timedelta(days=2), market_cap=1e9), db_path)
+    fetch = FakeFetch(_fund())
+
+    _get_fund(db_path, fetch)
+
+    assert fetch.calls == []
+
+
+def test_get_refetches_stale_fund(db_path: Path) -> None:
+    save_financials(_fund(fetched_at=NOW - timedelta(days=MAX_AGE)), db_path)
+    fresh = _fund()
+    fetch = FakeFetch(fresh)
+
+    assert _get_fund(db_path, fetch) == fresh
+    assert fetch.calls == ["IGDA.L"]
+
+
+def test_get_still_refetches_company_without_market_cap(db_path: Path) -> None:
+    save_financials(_financials(market_cap=None, quote_type="EQUITY"), db_path)
+    fetch = FakeFetch(_financials())
+
+    _get(db_path, fetch)
+
+    assert fetch.calls == ["MSFT"]
 
 
 def test_get_refresh_skips_fresh_cache_and_saves(db_path: Path) -> None:

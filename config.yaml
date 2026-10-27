@@ -62,6 +62,14 @@ screening:
   # Tickers to exclude whatever their industry says. Uppercase, e.g. "ABC" or "VOD.L".
   always_exclude_tickers: []
 
+  # Sharia-certified ETFs and funds you've checked yourself. Yahoo tickers, uppercase.
+  # Funds aren't companies, so they skip the business and ratio screens. A fund on this
+  # list passes, any other fund is doubtful. always_exclude_tickers still wins.
+  approved_funds:
+    - IGDA.L
+    - ISUS.L
+    - ISDE.L
+
 benchmark:
   # Halal benchmark used for every comparison.
   ticker: null  # set once you've chosen an Islamic index ETF

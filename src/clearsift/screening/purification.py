@@ -11,6 +11,9 @@ def purification_ratio(verdict: StockVerdict) -> float | None:
     # a stock that fails shouldn't be held, so there's no dividend to purify
     if not verdict.passes:
         return None
+    # we never saw the fund's income, and many Islamic funds purify for you
+    if verdict.is_fund:
+        return None
     return verdict.ratios.interest_ratio
 
 

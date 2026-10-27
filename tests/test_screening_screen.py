@@ -26,6 +26,7 @@ CONFIG = ScreeningConfig(
     methodologies=(AAOIFI,),
     excluded_sectors=("alcohol", "tobacco"),
     always_exclude_tickers=(),
+    approved_funds=(),
 )
 
 
@@ -215,3 +216,75 @@ def test_compare_runs_every_methodology_from_one_fetch() -> None:
     assert len(get.calls) == 1
     assert [v.methodology for v in verdicts] == ["AAOIFI", "MSCI"]
     assert [v.passes for v in verdicts] == [False, True]
+
+
+FUNDS = replace(CONFIG, approved_funds=("IGDA.L", "ISUS.L"))
+
+
+def _etf(ticker: str = "IGDA.L", quote_type: str = "ETF") -> CompanyFinancials:
+    # what yfinance gives for an ETF: no sector, industry or balance sheet
+    return CompanyFinancials(ticker=ticker, quote_type=quote_type)
+
+
+@pytest.mark.parametrize("quote_type", ["ETF", "MUTUALFUND"])
+def test_approved_fund_is_compliant(quote_type: str) -> None:
+    verdict = screen_stock("igda.l", FUNDS, get=FakeGet(_etf(quote_type=quote_type)))
+
+    assert verdict.is_fund
+    assert verdict.status == "compliant"
+    assert verdict.passes
+    assert verdict.business.reasons == ["Sharia-certified fund, on your approved list"]
+    assert verdict.ratios.reasons == []
+
+
+def test_unapproved_fund_fails_in_strict_mode() -> None:
+    verdict = screen_stock("OTHER.L", FUNDS, get=FakeGet(_etf("OTHER.L")))
+
+    assert verdict.status == "doubtful"
+    assert not verdict.passes
+    assert verdict.business.reasons == ["fund: check its Sharia certification"]
+
+
+def test_unapproved_fund_passes_with_review_in_standard_mode() -> None:
+    verdict = screen_stock("OTHER.L", replace(FUNDS, mode="standard"), get=FakeGet(_etf("OTHER.L")))
+
+    assert verdict.status == "doubtful"
+    assert verdict.needs_review
+    assert verdict.passes
+
+
+def test_always_exclude_beats_approved_fund() -> None:
+    config = replace(FUNDS, always_exclude_tickers=("IGDA.L",))
+
+    verdict = screen_stock("IGDA.L", config, get=FakeGet(_etf()))
+
+    assert verdict.status == "excluded"
+    assert verdict.business.reasons == ["IGDA.L is on the always-exclude list"]
+
+
+def test_missing_quote_type_is_screened_as_company() -> None:
+    # an approved ticker whose quote type didn't come through still gets the full screen,
+    # which fails it for having no sector
+    verdict = screen_stock("IGDA.L", FUNDS, get=FakeGet(CompanyFinancials(ticker="IGDA.L")))
+
+    assert not verdict.is_fund
+    assert verdict.status == "excluded"
+    assert "sector is missing" in verdict.business.reasons
+
+
+def test_approved_ticker_that_is_a_company_gets_full_screen() -> None:
+    config = replace(CONFIG, approved_funds=("TEST",))
+    company = _company(quote_type="EQUITY", total_debt=500.0)
+
+    verdict = screen_stock("TEST", config, get=FakeGet(company))
+
+    assert not verdict.is_fund
+    assert verdict.status == "excluded"
+
+
+def test_compare_fund_gives_same_result_under_every_standard() -> None:
+    config = replace(FUNDS, methodologies=(AAOIFI, MSCI))
+
+    verdicts = compare_stock("IGDA.L", config, get=FakeGet(_etf()))
+
+    assert [v.status for v in verdicts] == ["compliant", "compliant"]

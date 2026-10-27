@@ -14,6 +14,7 @@ DEFAULT_DB_PATH = Path("data/cache.db")
 _FIELDS = (
     "sector",
     "industry",
+    "quote_type",
     "market_cap",
     "total_debt",
     "cash_and_short_term_investments",
@@ -29,13 +30,14 @@ _FIELDS = (
 )
 
 # bump this whenever the table changes, so old cache files get cleared out
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS financials (
     ticker TEXT PRIMARY KEY,
     sector TEXT,
     industry TEXT,
+    quote_type TEXT,
     market_cap REAL,
     total_debt REAL,
     cash_and_short_term_investments REAL,
@@ -134,7 +136,9 @@ def get_financials(
             db_path=db_path,
             now=now,
         )
-        if cached is not None and cached.market_cap is not None:
+        # funds are judged on the approved list, not ratios, and yfinance rarely has a
+        # market cap for them. Requiring one would mean refetching every fund every run
+        if cached is not None and (cached.market_cap is not None or cached.is_fund):
             return cached
 
     fresh = fetch(ticker)
