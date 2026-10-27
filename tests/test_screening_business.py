@@ -9,6 +9,7 @@ from clearsift.screening.business import (
     EXCLUDED_INDUSTRIES,
     KNOWN_INDUSTRIES_BY_SECTOR,
     NEEDS_REVIEW_INDUSTRIES,
+    check_excluded_sectors,
     screen_business,
 )
 

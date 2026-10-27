@@ -280,6 +280,8 @@ def test_approved_funds_pass(tmp_path: Path, capsys: pytest.CaptureFixture[str])
 
     out = capsys.readouterr().out
     assert code == 0
+    assert out.startswith("IGDA.L: PASS (compliant)\n  fund (ETF)\n")
+    assert "unknown" not in out
     assert out.count(FUND_REASON) == 3
     assert out.count(FUND_PURIFICATION) == 3
     assert "IGDA.L: PASS (compliant)" in out
@@ -312,6 +314,32 @@ def test_unapproved_fund_passes_in_standard_mode(
     assert "industry label" not in out
 
 
+def test_mutual_fund_label(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _run(_funds_config(tmp_path), "IGDA.L", data={"IGDA.L": {"quote_type": "MUTUALFUND"}})
+
+    assert "  fund (MUTUALFUND)\n" in capsys.readouterr().out
+
+
+def test_funds_only_run_still_catches_sector_typo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["approved_funds"] = ["IGDA.L"]
+    data["screening"]["excluded_sectors"] = ["alchohol"]
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    get = RecordingGet({"IGDA.L": ETF})
+
+    code = main(["screen", "IGDA.L", "--config", str(path)], get=get)
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert "alchohol" in captured.err
+    # caught before any ticker was even fetched
+    assert get.calls == []
+
+
 def test_compare_approved_fund(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     data = copy.deepcopy(CONFIG)
     data["screening"]["approved_funds"] = ["IGDA.L"]
@@ -323,6 +351,7 @@ def test_compare_approved_fund(tmp_path: Path, capsys: pytest.CaptureFixture[str
 
     out = capsys.readouterr().out
     assert code == 0
+    assert out.startswith("IGDA.L\n  fund (ETF)\n")
     assert out.count(FUND_REASON) == 1
     assert out.count(FUND_PURIFICATION) == 1
     assert "passes under 3 of 3 standards" in out
