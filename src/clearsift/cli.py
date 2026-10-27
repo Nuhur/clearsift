@@ -6,31 +6,46 @@ from collections.abc import Callable
 from dataclasses import fields
 from decimal import ROUND_CEILING, Decimal
 from functools import partial
+from typing import Protocol
 
-from clearsift.config import ConfigError, load_config
+from clearsift.config import ConfigError, ScreeningConfig, load_config
 from clearsift.data.cache import get_financials
 from clearsift.data.models import CompanyFinancials
 from clearsift.screening.business import check_excluded_sectors
 from clearsift.screening.purification import purification_ratio
 from clearsift.screening.screen import StockVerdict, compare_stock, screen_stock
+from clearsift.t212.client import T212Client, T212Error
+from clearsift.t212.models import Position
+from clearsift.t212.tickers import t212_to_yahoo
+
+
+class PositionSource(Protocol):
+    """Anything that can list open positions, e.g. T212Client."""
+
+    def positions(self) -> list[Position]: ...
+
+    def close(self) -> None: ...
 
 
 def main(
     argv: list[str] | None = None,
     get: Callable[..., CompanyFinancials] = get_financials,
+    make_client: Callable[[], PositionSource] = T212Client.from_env,
 ) -> int:
     """Run the clearsift command line and return the exit code."""
     parser = argparse.ArgumentParser(prog="clearsift", description="Halal stock screener.")
     commands = parser.add_subparsers(dest="command", required=True)
     screen = commands.add_parser("screen", help="screen one or more stocks")
     screen.add_argument("tickers", nargs="+", metavar="TICKER")
-    screen.add_argument("--config", default="config.yaml", help="path to config.yaml")
-    screen.add_argument(
-        "--compare", action="store_true", help="show the result under every methodology"
-    )
-    screen.add_argument(
-        "--refresh", action="store_true", help="ignore the cache and fetch fresh data"
-    )
+    portfolio = commands.add_parser("portfolio", help="screen your open Trading 212 positions")
+    for command in (screen, portfolio):
+        command.add_argument("--config", default="config.yaml", help="path to config.yaml")
+        command.add_argument(
+            "--compare", action="store_true", help="show the result under every methodology"
+        )
+        command.add_argument(
+            "--refresh", action="store_true", help="ignore the cache and fetch fresh data"
+        )
     args = parser.parse_args(argv)
 
     if args.refresh:
@@ -48,19 +63,21 @@ def main(
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    if args.command == "portfolio":
+        return _run_portfolio(config.screening, args.compare, get, make_client)
+    return _run_screen(args.tickers, config.screening, args.compare, get)
+
+
+def _run_screen(
+    tickers: list[str],
+    config: ScreeningConfig,
+    compare: bool,
+    get: Callable[..., CompanyFinancials],
+) -> int:
     all_pass = True
-    for i, ticker in enumerate(args.tickers):
+    for i, ticker in enumerate(tickers):
         try:
-            if args.compare:
-                verdicts = compare_stock(ticker, config.screening, get=get)
-                text = format_comparison(verdicts)
-                # the exit code still follows the methodology picked in the config
-                chosen = config.screening.methodology.label
-                passes = next(v.passes for v in verdicts if v.methodology == chosen)
-            else:
-                verdict = screen_stock(ticker, config.screening, get=get)
-                text = format_verdict(verdict)
-                passes = verdict.passes
+            text, verdict = _screen_one(ticker, config, compare, get)
         except ValueError as exc:
             # screen_business raises this when config.yaml names a group it can't map
             print(f"error: {exc}", file=sys.stderr)
@@ -68,9 +85,85 @@ def main(
         if i:
             print()
         print(text)
-        all_pass = all_pass and passes
+        all_pass = all_pass and verdict.passes
 
     return 0 if all_pass else 1
+
+
+def _run_portfolio(
+    config: ScreeningConfig,
+    compare: bool,
+    get: Callable[..., CompanyFinancials],
+    make_client: Callable[[], PositionSource],
+) -> int:
+    try:
+        client = make_client()
+        try:
+            positions = client.positions()
+        finally:
+            client.close()
+    except T212Error as exc:
+        # these messages never hold the key, secret or response body
+        print(f"trading 212 error: {exc}", file=sys.stderr)
+        return 2
+
+    if not positions:
+        print("no open positions")
+        return 0
+
+    holdings: list[str] = []
+    not_checked: list[str] = []
+    review: list[str] = []
+    passed = failed = 0
+    for position in positions:
+        t212 = position.ticker
+        yahoo = t212_to_yahoo(t212) if t212 is not None else None
+        if yahoo is None:
+            # guessing a ticker could screen the wrong company, so leave it to a human
+            label = t212 or "unknown ticker"
+            not_checked.append(f"  {label}, {_quantity(position.quantity)}: {_NOT_CONVERTED}")
+            review.append(f"  {label}: not checked, {_NOT_CONVERTED}")
+            continue
+
+        try:
+            text, verdict = _screen_one(yahoo, config, compare, get)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        holdings.append(f"{yahoo} ({t212}), {_quantity(position.quantity)}\n{text}")
+        if verdict.passes:
+            passed += 1
+        else:
+            failed += 1
+            review.append(f"  {yahoo} ({t212}): FAIL, {_main_reason(verdict)}")
+
+    sections = holdings[:]
+    if not_checked:
+        sections.append("\n".join(["Not checked", *not_checked]))
+    sections.append("\n".join(["Review", *(review or ["  nothing to review"])]))
+    count = len(positions)
+    sections.append(
+        f"{count} holding{'' if count == 1 else 's'}: {passed} pass, {failed} fail, "
+        f"{len(not_checked)} not checked"
+    )
+    print("\n\n".join(sections))
+
+    return 0 if failed == 0 and not not_checked else 1
+
+
+def _screen_one(
+    ticker: str,
+    config: ScreeningConfig,
+    compare: bool,
+    get: Callable[..., CompanyFinancials],
+) -> tuple[str, StockVerdict]:
+    if not compare:
+        verdict = screen_stock(ticker, config, get=get)
+        return format_verdict(verdict), verdict
+    verdicts = compare_stock(ticker, config, get=get)
+    # pass or fail still follows the methodology picked in the config
+    chosen = next(v for v in verdicts if v.methodology == config.methodology.label)
+    return format_comparison(verdicts), chosen
 
 
 def format_verdict(verdict: StockVerdict) -> str:
@@ -113,6 +206,31 @@ def format_comparison(verdicts: list[StockVerdict]) -> str:
 
 _BUSINESS_WARNING = "  check by hand: the industry label alone can't confirm this business is halal"
 _INTEREST_WARNING = "  check by hand: interest income isn't in the latest report"
+
+
+_NOT_CONVERTED = "couldn't convert ticker, check by hand"
+
+
+def _main_reason(verdict: StockVerdict) -> str:
+    # the screen that set the overall status holds the reason that matters
+    business, ratios = verdict.business, verdict.ratios
+    if business.status == verdict.status and business.reasons:
+        return business.reasons[0]
+    # an excluded ratio result only keeps the reasons that didn't pass
+    if ratios.status == "excluded" and ratios.reasons:
+        return ratios.reasons[0]
+    # a doubtful one keeps every reason, so the first could be a harmless pass.
+    # Doubt only ever comes from interest income
+    if ratios.status == "doubtful":
+        return "interest income isn't in the latest report, check by hand"
+    return verdict.status
+
+
+def _quantity(quantity: float | None) -> str:
+    if quantity is None:
+        return "quantity unknown"
+    # fractional shares go to 6 places, but whole ones shouldn't show as 5.000000
+    return f"quantity {f'{quantity:.6f}'.rstrip('0').rstrip('.')}"
 
 
 def _purification_line(verdict: StockVerdict) -> str:
