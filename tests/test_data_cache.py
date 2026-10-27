@@ -235,6 +235,45 @@ def test_get_caches_partial_result(db_path: Path) -> None:
     assert _load(db_path) == partial
 
 
+def test_get_refresh_skips_fresh_cache_and_saves(db_path: Path) -> None:
+    save_financials(_financials(fetched_at=NOW - timedelta(hours=1), total_debt=1.0), db_path)
+    fresh = _financials(total_debt=2.0)
+    fetch = FakeFetch(fresh)
+
+    result = get_financials(
+        "MSFT",
+        max_age_days=MAX_AGE,
+        market_cap_max_age_days=MARKET_CAP_MAX_AGE,
+        db_path=db_path,
+        fetch=fetch,
+        now=NOW,
+        refresh=True,
+    )
+
+    assert result == fresh
+    assert fetch.calls == ["MSFT"]
+    assert _load(db_path) == fresh
+
+
+def test_get_refresh_all_none_result_keeps_older_cache(db_path: Path) -> None:
+    older = _financials(fetched_at=NOW - timedelta(hours=1))
+    save_financials(older, db_path)
+    empty = CompanyFinancials(ticker="MSFT", fetched_at=NOW)
+
+    result = get_financials(
+        "MSFT",
+        max_age_days=MAX_AGE,
+        market_cap_max_age_days=MARKET_CAP_MAX_AGE,
+        db_path=db_path,
+        fetch=FakeFetch(empty),
+        now=NOW,
+        refresh=True,
+    )
+
+    assert result == empty
+    assert _load(db_path) == older
+
+
 def _write_old_style_cache(db_path: Path, fetched_at: datetime) -> None:
     # the table as it was before interest_income was added
     db_path.parent.mkdir(parents=True)

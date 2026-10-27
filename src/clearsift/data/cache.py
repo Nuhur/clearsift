@@ -123,17 +123,19 @@ def get_financials(
     db_path: Path = DEFAULT_DB_PATH,
     fetch: Callable[[str], CompanyFinancials] = fetch_financials,
     now: datetime | None = None,
+    refresh: bool = False,
 ) -> CompanyFinancials:
     """Return a company's financials from the cache, or fetch and save fresh ones."""
-    cached = load_financials(
-        ticker,
-        max_age_days=max_age_days,
-        market_cap_max_age_days=market_cap_max_age_days,
-        db_path=db_path,
-        now=now,
-    )
-    if cached is not None and cached.market_cap is not None:
-        return cached
+    if not refresh:
+        cached = load_financials(
+            ticker,
+            max_age_days=max_age_days,
+            market_cap_max_age_days=market_cap_max_age_days,
+            db_path=db_path,
+            now=now,
+        )
+        if cached is not None and cached.market_cap is not None:
+            return cached
 
     fresh = fetch(ticker)
     # all None usually means yfinance fell over, so don't cache it or we'd be stuck with it

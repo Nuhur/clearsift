@@ -4,6 +4,7 @@ import argparse
 import sys
 from collections.abc import Callable
 from dataclasses import fields
+from functools import partial
 
 from clearsift.config import ConfigError, load_config
 from clearsift.data.cache import get_financials
@@ -24,7 +25,13 @@ def main(
     screen.add_argument(
         "--compare", action="store_true", help="show the result under every methodology"
     )
+    screen.add_argument(
+        "--refresh", action="store_true", help="ignore the cache and fetch fresh data"
+    )
     args = parser.parse_args(argv)
+
+    if args.refresh:
+        get = partial(get, refresh=True)
 
     try:
         config = load_config(args.config)

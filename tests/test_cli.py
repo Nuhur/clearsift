@@ -1,4 +1,6 @@
 import copy
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -6,6 +8,7 @@ import pytest
 import yaml
 
 from clearsift.cli import main
+from clearsift.data.cache import get_financials, load_financials, save_financials
 from clearsift.data.models import CompanyFinancials
 
 CONFIG: dict[str, Any] = {
@@ -333,6 +336,83 @@ def test_compare_shows_business_reasons_once(
     out = capsys.readouterr().out
     assert out.count("falls under excluded group 'tobacco'") == 1
     assert "passes under 0 of 3 standards" in out
+
+
+class RecordingGet(FakeGet):
+    """A FakeGet that also remembers the keyword arguments of every call."""
+
+    def __init__(self, data: dict[str, dict[str, Any]]) -> None:
+        super().__init__(data)
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __call__(self, ticker: str, **kwargs: Any) -> CompanyFinancials:
+        self.calls.append((ticker, kwargs))
+        return super().__call__(ticker, **kwargs)
+
+
+def test_refresh_asks_for_fresh_data_for_every_ticker(config_path: Path) -> None:
+    get = RecordingGet({"MSFT": GOOD, "ADBE": GOOD})
+
+    main(["screen", "MSFT", "ADBE", "--refresh", "--config", str(config_path)], get=get)
+
+    assert [(t, kw.get("refresh")) for t, kw in get.calls] == [("MSFT", True), ("ADBE", True)]
+
+
+def test_refresh_works_with_compare(three_standards: Path) -> None:
+    get = RecordingGet({"MSFT": GOOD})
+
+    main(["screen", "MSFT", "--compare", "--refresh", "--config", str(three_standards)], get=get)
+
+    assert [(t, kw.get("refresh")) for t, kw in get.calls] == [("MSFT", True)]
+
+
+def test_without_refresh_nothing_is_passed(config_path: Path) -> None:
+    get = RecordingGet({"MSFT": GOOD})
+
+    main(["screen", "MSFT", "--config", str(config_path)], get=get)
+
+    assert "refresh" not in get.calls[0][1]
+
+
+def _cached_get(db_path: Path, fetch: Callable[[str], CompanyFinancials]) -> Callable[..., Any]:
+    return partial(get_financials, db_path=db_path, fetch=fetch)
+
+
+@pytest.mark.parametrize("extra", [[], ["--compare"]])
+def test_refresh_bypasses_cache_and_updates_it(
+    tmp_path: Path, config_path: Path, extra: list[str]
+) -> None:
+    db_path = tmp_path / "cache.db"
+    # a fresh cached copy that would fail on debt, so a pass proves it wasn't used
+    save_financials(CompanyFinancials(ticker="MSFT", **{**GOOD, "total_debt": 900.0}), db_path)
+    fetched: list[str] = []
+
+    def fake_fetch(ticker: str) -> CompanyFinancials:
+        fetched.append(ticker)
+        return CompanyFinancials(ticker=ticker, **GOOD)
+
+    args = ["screen", "MSFT", "--refresh", *extra, "--config", str(config_path)]
+    code = main(args, get=_cached_get(db_path, fake_fetch))
+
+    assert code == 0
+    assert fetched == ["MSFT"]
+    cached = load_financials("MSFT", max_age_days=120, market_cap_max_age_days=1, db_path=db_path)
+    assert cached is not None
+    assert cached.total_debt == 100.0
+
+
+def test_without_refresh_cache_is_used(tmp_path: Path, config_path: Path) -> None:
+    db_path = tmp_path / "cache.db"
+    save_financials(CompanyFinancials(ticker="MSFT", **GOOD), db_path)
+    fetched: list[str] = []
+
+    def fake_fetch(ticker: str) -> CompanyFinancials:
+        fetched.append(ticker)
+        return CompanyFinancials(ticker=ticker, **GOOD)
+
+    main(["screen", "MSFT", "--config", str(config_path)], get=_cached_get(db_path, fake_fetch))
+
+    assert fetched == []
 
 
 def test_compare_older_interest_income_warning(
