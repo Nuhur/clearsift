@@ -245,13 +245,41 @@ def test_balance_sheet_fields() -> None:
     assert cf.accounts_receivable == 2e10
 
 
-def test_receivables_falls_back_to_receivables_row() -> None:
+def test_receivables_prefers_total_receivables() -> None:
+    # XOM 2025 figures
     sheet = _statement(
-        {"Total Assets": [3.5e11], "Accounts Receivable": [NAN], "Receivables": [4e10]},
+        {"Total Assets": [4.5e11], "Accounts Receivable": [3.5744e10], "Receivables": [4.4562e10]},
+        ["2025-12-31"],
+    )
+
+    assert _fetch_with_balance_sheet(sheet).accounts_receivable == 4.4562e10
+
+
+def test_receivables_falls_back_to_accounts_receivable_row() -> None:
+    sheet = _statement(
+        {"Total Assets": [3.5e11], "Receivables": [NAN], "Accounts Receivable": [4e10]},
         ["2025-06-30"],
     )
 
     assert _fetch_with_balance_sheet(sheet).accounts_receivable == 4e10
+
+
+def test_negative_total_receivables_falls_back_to_accounts_receivable() -> None:
+    sheet = _statement(
+        {"Total Assets": [3.5e11], "Receivables": [-1.0], "Accounts Receivable": [4e10]},
+        ["2025-06-30"],
+    )
+
+    assert _fetch_with_balance_sheet(sheet).accounts_receivable == 4e10
+
+
+def test_receivables_does_not_use_older_years() -> None:
+    sheet = _statement(
+        {"Total Assets": [3.5e11, 3.6e11], "Receivables": [4e10, NAN]},
+        ["2024-06-30", "2025-06-30"],
+    )
+
+    assert _fetch_with_balance_sheet(sheet).accounts_receivable is None
 
 
 def test_balance_sheet_does_not_use_older_years() -> None:

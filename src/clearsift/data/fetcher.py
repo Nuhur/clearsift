@@ -21,7 +21,8 @@ _FIELD_MAP: dict[str, str] = {
 
 # companies report these under different rows, so try each list in order
 _INTEREST_INCOME_ROWS = ("Interest Income", "Interest Income Non Operating")
-_RECEIVABLES_ROWS = ("Accounts Receivable", "Receivables")
+# total receivables first, it's what the index rules count and it's the more cautious number
+_RECEIVABLES_ROWS = ("Receivables", "Accounts Receivable")
 
 
 def fetch_financials(ticker: str) -> CompanyFinancials:
