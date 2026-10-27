@@ -13,6 +13,9 @@ Status = Literal["compliant", "doubtful", "excluded"]
 class ScreenResult:
     status: Status
     reasons: list[str]
+    # only the ratio screen fills these, purification needs the actual number
+    interest_ratio: float | None = None
+    interest_year: int | None = None
 
 
 # Which Yahoo industries each excluded group in config.yaml covers.

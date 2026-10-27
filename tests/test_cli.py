@@ -205,6 +205,59 @@ def test_no_data_line_not_shown_for_partial_data(
     assert "no data from yfinance" not in capsys.readouterr().out
 
 
+def _standard_config(tmp_path: Path) -> Path:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["mode"] = "standard"
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def test_purification_line_for_passing_stock(
+    config_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(config_path, "MSFT", data={"MSFT": GOOD})
+
+    assert "  purify 2.00% of dividends\n" in capsys.readouterr().out
+
+
+def test_purification_percent_rounds_up(
+    config_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 4.91 / 500 is 0.982%, rounding to nearest would show 0.98%
+    _run(config_path, "MSFT", data={"MSFT": {**GOOD, "interest_income": 4.91}})
+
+    assert "  purify 0.99% of dividends\n" in capsys.readouterr().out
+
+
+def test_purification_line_says_older_year(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(_standard_config(tmp_path), "AAPL", data={"AAPL": {**GOOD, "interest_income_year": 2023}})
+
+    assert "  purify 2.00% of dividends (based on 2023)" in capsys.readouterr().out
+
+
+def test_purification_line_when_not_disclosed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    company = {**GOOD, "interest_income_year": None, "interest_income": None}
+
+    _run(_standard_config(tmp_path), "AAPL", data={"AAPL": company})
+
+    out = capsys.readouterr().out
+    assert "AAPL: PASS (doubtful)" in out
+    assert "  purification: can't work out, interest income not disclosed" in out
+
+
+def test_no_purification_line_for_failed_stock(
+    config_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(config_path, "ABC", data={"ABC": {**GOOD, "total_debt": 400.0}})
+
+    assert "purif" not in capsys.readouterr().out
+
+
 def test_missing_config_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code = _run(tmp_path / "nope.yaml", "MSFT", data={"MSFT": GOOD})
 
@@ -336,6 +389,33 @@ def test_compare_shows_business_reasons_once(
     out = capsys.readouterr().out
     assert out.count("falls under excluded group 'tobacco'") == 1
     assert "passes under 0 of 3 standards" in out
+
+
+def test_compare_shows_purification_once(
+    three_standards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _compare(three_standards, "MSFT", data={"MSFT": GOOD})
+
+    assert capsys.readouterr().out.count("purify 2.00% of dividends") == 1
+
+
+def test_compare_shows_purification_if_any_standard_passes(
+    three_standards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # fails AAOIFI on debt, passes FTSE and MSCI
+    _compare(three_standards, "ABC", data={"ABC": {**GOOD, "total_debt": 400.0}})
+
+    assert "  purify 2.00% of dividends" in capsys.readouterr().out
+
+
+def test_compare_no_purification_if_every_standard_fails(
+    three_standards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tobacco = {**GOOD, "sector": "Consumer Defensive", "industry": "Tobacco"}
+
+    _compare(three_standards, "MO", data={"MO": tobacco})
+
+    assert "purif" not in capsys.readouterr().out
 
 
 class RecordingGet(FakeGet):

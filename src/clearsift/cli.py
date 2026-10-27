@@ -4,11 +4,13 @@ import argparse
 import sys
 from collections.abc import Callable
 from dataclasses import fields
+from decimal import ROUND_CEILING, Decimal
 from functools import partial
 
 from clearsift.config import ConfigError, load_config
 from clearsift.data.cache import get_financials
 from clearsift.data.models import CompanyFinancials
+from clearsift.screening.purification import purification_ratio
 from clearsift.screening.screen import StockVerdict, compare_stock, screen_stock
 
 
@@ -71,6 +73,8 @@ def format_verdict(verdict: StockVerdict) -> str:
         lines.append(_BUSINESS_WARNING)
     if verdict.needs_review and verdict.ratios.status == "doubtful":
         lines.append(_INTEREST_WARNING)
+    if verdict.passes:
+        lines.append(_purification_line(verdict))
     lines += [f"  - {reason}" for reason in verdict.business.reasons + verdict.ratios.reasons]
     return "\n".join(lines)
 
@@ -83,6 +87,10 @@ def format_comparison(verdicts: list[StockVerdict]) -> str:
     if first.business.status == "doubtful":
         lines.append(_BUSINESS_WARNING)
     lines += [f"  - {reason}" for reason in first.business.reasons]
+    # the ratio is the same under every standard, so show it once
+    passing = next((v for v in verdicts if v.passes), None)
+    if passing is not None:
+        lines.append(_purification_line(passing))
 
     for verdict in verdicts:
         lines.append(f"  {verdict.methodology}: {_pass_fail(verdict)}")
@@ -97,6 +105,21 @@ def format_comparison(verdicts: list[StockVerdict]) -> str:
 
 _BUSINESS_WARNING = "  check by hand: the industry label alone can't confirm this business is halal"
 _INTEREST_WARNING = "  check by hand: interest income isn't in the latest report"
+
+
+def _purification_line(verdict: StockVerdict) -> str:
+    ratio = purification_ratio(verdict)
+    # the stock passed, so any other missing number would have failed it. That leaves
+    # interest income not being disclosed, which standard mode lets through
+    if ratio is None:
+        return "  purification: can't work out, interest income not disclosed"
+    # round up so following the percentage never means giving too little
+    percent = (Decimal(str(ratio)) * 100).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+    line = f"  purify {percent}% of dividends"
+    year = verdict.ratios.interest_year
+    if year != verdict.financials.latest_income_statement_year:
+        line += f" (based on {year})"
+    return line
 
 
 def _pass_fail(verdict: StockVerdict) -> str:
