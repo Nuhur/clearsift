@@ -21,6 +21,10 @@ dependencies = [
 clearsift = "clearsift.cli:main"
 
 [project.optional-dependencies]
+dashboard = [
+    "plotly>=5.20",
+    "streamlit>=1.45",
+]
 dev = [
     "mypy>=1.10",
     "pytest>=8.0",
