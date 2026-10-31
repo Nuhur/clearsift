@@ -4,7 +4,7 @@ A halal stock screener that only lets through what it can show is compliant.
 
 Clearsift checks a stock's line of business and its balance sheet against Sharia screening rules, using free data from Yahoo Finance. It tells you whether the stock passes, why, and how much of its dividends to give to charity. If the data is missing or out of date, the stock doesn't get in.
 
-> **Work in progress.** The screening engine works. Portfolio, ratings and backtesting are still to come.
+> **Work in progress.** The screening engine and Trading 212 portfolio check work. The dashboard, ratings and backtesting are still to come.
 
 ## Quick start (Windows)
 
@@ -16,6 +16,8 @@ python -m venv .venv
 pip install -e ".[dev]"
 clearsift screen AAPL
 ```
+
+To screen your Trading 212 holdings, copy `.env.example` to `.env` and add your own API key (see [Trading 212](#trading-212)). Never commit `.env`.
 
 You can screen several stocks at once, e.g. `clearsift screen AAPL MSFT XOM`.
 
@@ -90,6 +92,86 @@ MSFT
 
 `--compare` screens the stock under every standard in `config.yaml` and shows the result for each one, then a line like "passes under 2 of 3 standards". The business screen and the data are the same for all of them, only the ratio limits change. The exit code still follows the standard picked in `config.yaml`.
 
+## Trading 212
+
+```
+clearsift portfolio
+```
+
+This reads your open Trading 212 positions, read-only. It converts each Trading 212 ticker to a Yahoo one, screens it, then lists anything you should review. It only shows tickers and quantities, never prices or money values.
+
+`--compare` and `--refresh` work the same as with `screen`. The exit code is 0 if every holding passes, 1 if any fails or couldn't be checked, and 2 if `config.yaml` or Trading 212 has a problem.
+
+### Creating a read-only API key
+
+1. In the Trading 212 app, go to Settings → API (Beta).
+2. Create a key, and untick "Orders - Execute" and "Pies - Write".
+3. Copy the key and the secret somewhere safe. You'll need both.
+
+Live and demo accounts use separate keys, so make one in whichever account you want to screen. The API only works with Invest and Stocks ISA accounts.
+
+### Setting up .env
+
+Copy `.env.example` to `.env` and fill in:
+
+- `T212_API_KEY`: your API key
+- `T212_API_SECRET`: your API secret
+- `T212_ENV`: `live` or `demo`, to match the account the key came from
+
+**Never commit `.env`.** It holds your key and secret. It's already in `.gitignore`, so leave it there.
+
+### Example
+
+Made-up holdings, not a real portfolio. Run in standard mode.
+
+```
+> clearsift portfolio
+ISUS.L (ISUSl_EQ), quantity 40
+ISUS.L: PASS (compliant)
+  fund (ETF)
+  purification: check the fund's own reports
+  - Sharia-certified fund, on your approved list
+
+MSFT (MSFT_US_EQ), quantity 2.5
+MSFT: PASS (compliant)
+  Technology / Software - Infrastructure
+  purify 1.00% of dividends
+  - industry 'Software - Infrastructure' isn't excluded or marked for review
+  - debt is 3.26% of market cap, AAOIFI limit is 30%
+  - cash is 1.95% of market cap, AAOIFI limit is 30%
+  - interest income is 0.99% of revenue, AAOIFI limit is 5%
+
+MO (MO_US_EQ), quantity 10
+MO: FAIL (excluded)
+  Consumer Defensive / Tobacco
+  - industry 'Tobacco' falls under excluded group 'tobacco'
+  - debt is 12.41% of market cap, AAOIFI limit is 30%
+  - cash is 2.13% of market cap, AAOIFI limit is 30%
+  - interest income is 0.48% of revenue, AAOIFI limit is 5%
+
+Not checked
+  SAPd_EQ, quantity 3: couldn't convert ticker, check by hand
+
+Review
+  MO (MO_US_EQ): FAIL, industry 'Tobacco' falls under excluded group 'tobacco'
+  SAPd_EQ: not checked, couldn't convert ticker, check by hand
+
+4 holdings: 2 pass, 1 fail, 1 not checked
+```
+
+Funds skip the business and ratio checks. Only funds on your `approved_funds` list in `config.yaml` count as compliant, any other fund is doubtful.
+
+### Which tickers work
+
+- **US shares**, like `AAPL_US_EQ`, become `AAPL`.
+- **London shares**, like `VODl_EQ`, become `VOD.L`.
+
+Anything else, like other exchanges or share classes such as `BRK.B`, shows as "not checked". Guessing the Yahoo ticker could screen the wrong company, so it's left for you to check by hand.
+
+### Safety
+
+Clearsift has no code that can place, change or cancel orders. The Trading 212 client only ever sends read requests. With "Orders - Execute" unticked, the key itself can't place orders either, so even a bug couldn't trade for you.
+
 ## How screening works
 
 ### Business activity
@@ -154,7 +236,6 @@ ruff check .
 
 ## Roadmap
 
-- **Trading 212 integration:** a read-only view of your portfolio, with non-compliant holdings flagged.
 - **Dashboard:** holdings, profit and loss, and sector allocation.
 - **Ratings:** Buy, Hold or Sell for compliant stocks, with reasons.
 - **Backtesting:** test whether the ratings beat a halal benchmark.
