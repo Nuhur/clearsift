@@ -6,25 +6,24 @@ from collections.abc import Callable
 from dataclasses import fields
 from decimal import ROUND_CEILING, Decimal
 from functools import partial
-from typing import Protocol
 
 from clearsift.config import ConfigError, ScreeningConfig, load_config
 from clearsift.data.cache import get_financials
 from clearsift.data.models import CompanyFinancials
+from clearsift.portfolio import (
+    NOT_CONVERTED,
+    Holding,
+    PositionSource,
+    fetch_positions,
+    portfolio_summary,
+    quantity_text,
+    review_lines,
+    screen_holdings,
+)
 from clearsift.screening.business import check_excluded_sectors
 from clearsift.screening.purification import purification_ratio
 from clearsift.screening.screen import StockVerdict, compare_stock, screen_stock
 from clearsift.t212.client import T212Client, T212Error
-from clearsift.t212.models import Position
-from clearsift.t212.tickers import t212_to_yahoo
-
-
-class PositionSource(Protocol):
-    """Anything that can list open positions, e.g. T212Client."""
-
-    def positions(self) -> list[Position]: ...
-
-    def close(self) -> None: ...
 
 
 def main(
@@ -97,11 +96,7 @@ def _run_portfolio(
     make_client: Callable[[], PositionSource],
 ) -> int:
     try:
-        client = make_client()
-        try:
-            positions = client.positions()
-        finally:
-            client.close()
+        positions = fetch_positions(make_client)
     except T212Error as exc:
         # these messages never hold the key, secret or response body
         print(f"trading 212 error: {exc}", file=sys.stderr)
@@ -111,44 +106,36 @@ def _run_portfolio(
         print("no open positions")
         return 0
 
-    holdings: list[str] = []
-    not_checked: list[str] = []
-    review: list[str] = []
-    passed = failed = 0
-    for position in positions:
-        t212 = position.ticker
-        yahoo = t212_to_yahoo(t212) if t212 is not None else None
-        if yahoo is None:
-            # guessing a ticker could screen the wrong company, so leave it to a human
-            label = t212 or "unknown ticker"
-            not_checked.append(f"  {label}, {_quantity(position.quantity)}: {_NOT_CONVERTED}")
-            review.append(f"  {label}: not checked, {_NOT_CONVERTED}")
-            continue
+    try:
+        holdings = screen_holdings(positions, config, compare, get)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
-        try:
-            text, verdict = _screen_one(yahoo, config, compare, get)
-        except ValueError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2
-        holdings.append(f"{yahoo} ({t212}), {_quantity(position.quantity)}\n{text}")
-        if verdict.passes:
-            passed += 1
-        else:
-            failed += 1
-            review.append(f"  {yahoo} ({t212}): FAIL, {_main_reason(verdict)}")
-
-    sections = holdings[:]
+    checked = [h for h in holdings if h.verdict is not None]
+    not_checked = [
+        f"  {h.label}, {_quantity(h)}: {NOT_CONVERTED}" for h in holdings if h.verdict is None
+    ]
+    sections = [f"{h.title}, {_quantity(h)}\n{_holding_text(h, compare)}" for h in checked]
     if not_checked:
         sections.append("\n".join(["Not checked", *not_checked]))
-    sections.append("\n".join(["Review", *(review or ["  nothing to review"])]))
-    count = len(positions)
-    sections.append(
-        f"{count} holding{'' if count == 1 else 's'}: {passed} pass, {failed} fail, "
-        f"{len(not_checked)} not checked"
-    )
+    review = _indent(review_lines(holdings)) or ["  nothing to review"]
+    sections.append("\n".join(["Review", *review]))
+    sections.append(portfolio_summary(holdings))
     print("\n\n".join(sections))
 
-    return 0 if failed == 0 and not not_checked else 1
+    return 0 if all(h.verdict is not None and h.verdict.passes for h in holdings) else 1
+
+
+def _holding_text(holding: Holding, compare: bool) -> str:
+    # without compare there's only the one verdict
+    if compare:
+        return format_comparison(holding.verdicts)
+    return format_verdict(holding.verdicts[0])
+
+
+def _quantity(holding: Holding) -> str:
+    return f"quantity {quantity_text(holding.position.quantity)}"
 
 
 def _screen_one(
@@ -230,31 +217,6 @@ def standards_summary(verdicts: list[StockVerdict]) -> str:
     """Say how many of the standards a stock passes under."""
     passed = sum(v.passes for v in verdicts)
     return f"passes under {passed} of {len(verdicts)} standards"
-
-
-_NOT_CONVERTED = "couldn't convert ticker, check by hand"
-
-
-def _main_reason(verdict: StockVerdict) -> str:
-    # the screen that set the overall status holds the reason that matters
-    business, ratios = verdict.business, verdict.ratios
-    if business.status == verdict.status and business.reasons:
-        return business.reasons[0]
-    # an excluded ratio result only keeps the reasons that didn't pass
-    if ratios.status == "excluded" and ratios.reasons:
-        return ratios.reasons[0]
-    # a doubtful one keeps every reason, so the first could be a harmless pass.
-    # Doubt only ever comes from interest income
-    if ratios.status == "doubtful":
-        return "interest income isn't in the latest report, check by hand"
-    return verdict.status
-
-
-def _quantity(quantity: float | None) -> str:
-    if quantity is None:
-        return "quantity unknown"
-    # fractional shares go to 6 places, but whole ones shouldn't show as 5.000000
-    return f"quantity {f'{quantity:.6f}'.rstrip('0').rstrip('.')}"
 
 
 def purification_line(verdict: StockVerdict) -> str:
