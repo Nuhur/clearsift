@@ -490,6 +490,60 @@ def test_holding_card_has_no_money_values(strict: ScreeningConfig) -> None:
         assert "USD" not in text
 
 
+def _compared(config: ScreeningConfig, ticker: str, data: dict[str, dict[str, Any]]) -> Holding:
+    (holding,) = screen_holdings([_position(ticker)], config, compare=True, get=FakeGet(data))
+    return holding
+
+
+def test_holding_card_compare(strict: ScreeningConfig) -> None:
+    # fails AAOIFI (the one picked in the config) on debt, passes FTSE
+    holding = _compared(strict, "ABC_US_EQ", {"ABC": {**GOOD, "total_debt": 400.0}})
+
+    card = holding_card(holding, compare=True)
+
+    assert isinstance(card, ComparisonCard)
+    assert card.ticker == "ABC (ABC_US_EQ)"
+    assert card.methodology == "AAOIFI"
+    assert card.result == "FAIL (excluded)"
+    assert card.colour == "red"
+    assert [(s.methodology, s.colour) for s in card.standards] == [
+        ("AAOIFI", "red"),
+        ("FTSE", "green"),
+    ]
+    assert card.summary == "passes under 1 of 2 standards"
+
+
+def test_holding_card_compare_matches_screener(strict: ScreeningConfig) -> None:
+    card = holding_card(_compared(strict, "MSFT_US_EQ", {"MSFT": GOOD}), compare=True)
+
+    assert card == replace(_compare(strict, GOOD, ticker="MSFT"), ticker="MSFT (MSFT_US_EQ)")
+
+
+def test_holding_card_compare_follows_another_chosen_standard(strict: ScreeningConfig) -> None:
+    config = replace(strict, methodology=strict.methodologies[1])
+    data = {"ABC": {**GOOD, "total_debt": 400.0}}
+
+    card = holding_card(_compared(config, "ABC_US_EQ", data), compare=True)
+
+    assert isinstance(card, ComparisonCard)
+    assert card.methodology == "FTSE"
+    assert card.result == "PASS (compliant)"
+
+
+def test_holding_card_compare_not_checked(strict: ScreeningConfig) -> None:
+    card = holding_card(_compared(strict, "SAPd_EQ", {}), compare=True)
+
+    assert card == NotCheckedCard("SAPd_EQ", "couldn't convert ticker, check by hand")
+
+
+def test_holding_card_compare_has_no_money_values(strict: ScreeningConfig) -> None:
+    text = repr(holding_card(_compared(strict, "MSFT_US_EQ", {"MSFT": GOOD}), compare=True))
+
+    assert "321.5" not in text
+    assert "987.25" not in text
+    assert "USD" not in text
+
+
 # holding_values
 
 

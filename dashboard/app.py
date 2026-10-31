@@ -95,11 +95,16 @@ def portfolio_page(config: ScreeningConfig) -> None:
         "Read-only, nothing here can place, change or cancel an order."
     )
 
-    # outside the button, so switching it on doesn't fetch everything again
+    # outside the form, so switching it on doesn't fetch everything again
     show_values = st.toggle("Show values")
-    if st.button("Load portfolio", type="primary"):
+    with st.form("portfolio"):
+        compare = st.toggle("Compare standards")
+        refresh = st.toggle("Refresh data")
+        submitted = st.form_submit_button("Load portfolio", type="primary")
+
+    if submitted:
         # drop the last load first, so an error never sits next to old results
-        st.session_state.pop("holdings", None)
+        st.session_state.pop("portfolio_result", None)
         try:
             with st.spinner("Loading positions from Trading 212..."):
                 positions = fetch_positions(T212Client.from_env)
@@ -107,17 +112,20 @@ def portfolio_page(config: ScreeningConfig) -> None:
             # these messages never hold the key, secret or response body
             st.error(f"Trading 212 error: {exc}")
             return
+        get = partial(get_financials, refresh=True) if refresh else get_financials
         try:
             with st.spinner("Screening..."):
-                st.session_state.holdings = screen_holdings(positions, config)
+                holdings = screen_holdings(positions, config, compare, get)
         except ValueError as exc:
             st.error(f"Screening error: {exc}")
             return
+        # keep compare with the results, since the toggle can change before the next load
+        st.session_state.portfolio_result = (holdings, compare)
 
-    holdings = st.session_state.get("holdings")
-    if holdings is None:
+    if "portfolio_result" not in st.session_state:
         st.info("Click Load portfolio to read your open positions from Trading 212.")
         return
+    holdings, compared = st.session_state.portfolio_result
     if not holdings:
         st.info("No open positions.")
         return
@@ -125,7 +133,7 @@ def portfolio_page(config: ScreeningConfig) -> None:
     st.subheader(portfolio_summary(holdings))
     for holding in holdings:
         values = holding_values(holding.position) if show_values else None
-        show_card(holding_card(holding), values)
+        show_card(holding_card(holding, compared), values)
 
     st.subheader("Review")
     review = review_lines(holdings)
@@ -147,7 +155,7 @@ def show_card(card: Card, values: list[tuple[str, str]] | None = None) -> None:
             _values(values)
             st.warning(card.message)
         elif isinstance(card, ComparisonCard):
-            show_comparison(card)
+            show_comparison(card, values)
         else:
             show_stock(card, values)
 
@@ -164,9 +172,10 @@ def show_stock(card: StockCard, values: list[tuple[str, str]] | None = None) -> 
     _bullets(card.reasons)
 
 
-def show_comparison(card: ComparisonCard) -> None:
+def show_comparison(card: ComparisonCard, values: list[tuple[str, str]] | None = None) -> None:
     """Draw a card for one stock under every standard in the config."""
     _heading(card.ticker, f"{card.methodology}: {card.result}", card.colour, card.company)
+    _values(values)
     _warnings(card.warnings)
     if card.purification:
         st.markdown(_escape(card.purification))

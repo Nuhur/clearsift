@@ -186,10 +186,16 @@ def screen_cards(
     return cards
 
 
-def holding_card(holding: Holding) -> StockCard | NotCheckedCard:
+def holding_card(
+    holding: Holding, compare: bool = False
+) -> StockCard | ComparisonCard | NotCheckedCard:
     """Turn one holding into a card, titled with both tickers."""
     if holding.verdict is None:
         return NotCheckedCard(holding.title, NOT_CONVERTED)
+    if compare:
+        # the holding's own verdict is the standard picked in config.yaml
+        card = comparison_card(holding.verdicts, holding.verdict.methodology)
+        return replace(card, ticker=holding.title)
     return replace(stock_card(holding.verdict), ticker=holding.title)
 
 
