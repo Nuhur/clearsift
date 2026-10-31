@@ -5,6 +5,7 @@ import pytest
 
 from clearsift.config import Methodology, ScreeningConfig
 from clearsift.data.models import CompanyFinancials
+from clearsift.screening.business import RatioValue
 from clearsift.screening.ratios import screen_ratios
 
 AAOIFI = Methodology(
@@ -471,3 +472,263 @@ def test_market_cap_standards_still_use_info() -> None:
 
     assert result.status == "compliant"
     assert "debt is 15.00% of market cap, AAOIFI limit is 30%" in result.reasons
+
+
+# Results from before the ratio values were recorded. Recording them mustn't change
+# a single status, reason or purification number
+UNCHANGED = [
+    (
+        "aaoifi",
+        {},
+        "compliant",
+        [
+            "debt is 10.00% of market cap, AAOIFI limit is 30%",
+            "cash is 20.00% of market cap, AAOIFI limit is 30%",
+            "interest income is 2.00% of revenue, AAOIFI limit is 5%",
+        ],
+        0.02,
+        2025,
+    ),
+    (
+        "aaoifi",
+        {"total_debt": 342.0},
+        "excluded",
+        ["debt is 34.20% of market cap, AAOIFI limit is 30%"],
+        None,
+        None,
+    ),
+    (
+        "aaoifi",
+        {"total_debt": 300.0},
+        "excluded",
+        ["debt is 30.00% of market cap, AAOIFI limit is 30%"],
+        None,
+        None,
+    ),
+    (
+        "aaoifi",
+        {"total_debt": 299.99},
+        "compliant",
+        [
+            "debt is just under 30% of market cap, AAOIFI limit is 30%",
+            "cash is 20.00% of market cap, AAOIFI limit is 30%",
+            "interest income is 2.00% of revenue, AAOIFI limit is 5%",
+        ],
+        0.02,
+        2025,
+    ),
+    (
+        "aaoifi",
+        {"cash_and_short_term_investments": None},
+        "excluded",
+        ["cash is missing"],
+        None,
+        None,
+    ),
+    ("aaoifi", {"total_debt": -1.0}, "excluded", ["debt is negative"], None, None),
+    ("aaoifi", {"market_cap": 0.0}, "excluded", ["market cap is zero or negative"], None, None),
+    (
+        "aaoifi",
+        {"market_cap": None, "interest_income": 30.0},
+        "excluded",
+        ["market cap is missing", "interest income is 6.00% of revenue, AAOIFI limit is 5%"],
+        None,
+        None,
+    ),
+    (
+        "aaoifi",
+        {"interest_income": 0.0001},
+        "compliant",
+        [
+            "debt is 10.00% of market cap, AAOIFI limit is 30%",
+            "cash is 20.00% of market cap, AAOIFI limit is 30%",
+            "interest income is under 0.01% of revenue, AAOIFI limit is 5%",
+        ],
+        0.0001 / 500.0,
+        2025,
+    ),
+    (
+        "aaoifi",
+        {"interest_income_year": 2023},
+        "doubtful",
+        [
+            "debt is 10.00% of market cap, AAOIFI limit is 30%",
+            "cash is 20.00% of market cap, AAOIFI limit is 30%",
+            "interest income is 2.00% of revenue (from 2023, newer years not reported), "
+            "AAOIFI limit is 5%",
+        ],
+        0.02,
+        2023,
+    ),
+    (
+        "aaoifi",
+        {"interest_income_year": 2023, "total_debt": 400.0},
+        "excluded",
+        [
+            "debt is 40.00% of market cap, AAOIFI limit is 30%",
+            "interest income is 2.00% of revenue (from 2023, newer years not reported), "
+            "AAOIFI limit is 5%",
+        ],
+        None,
+        None,
+    ),
+    (
+        "aaoifi",
+        {"interest_income_year": None},
+        "doubtful",
+        [
+            "debt is 10.00% of market cap, AAOIFI limit is 30%",
+            "cash is 20.00% of market cap, AAOIFI limit is 30%",
+            "interest income not disclosed in recent reports, check by hand",
+        ],
+        None,
+        None,
+    ),
+    (
+        "aaoifi",
+        {"latest_income_statement_year": None},
+        "excluded",
+        ["interest income is missing"],
+        None,
+        None,
+    ),
+    (
+        "aaoifi",
+        {"interest_income_revenue": 0.0},
+        "excluded",
+        ["total revenue is zero or negative"],
+        None,
+        None,
+    ),
+    (
+        "ftse",
+        {"balance_sheet_debt": 248.0},
+        "compliant",
+        [
+            "debt is 12.40% of total assets, FTSE limit is 33.333%",
+            "cash is 10.00% of total assets, FTSE limit is 33.333%",
+            "receivables plus cash is 15.00% of total assets, FTSE limit is 50%",
+            "interest income is 2.00% of revenue, FTSE limit is 5%",
+        ],
+        0.02,
+        2025,
+    ),
+    (
+        "ftse",
+        {"accounts_receivable": None},
+        "excluded",
+        ["accounts receivable is missing"],
+        None,
+        None,
+    ),
+    (
+        "ftse",
+        {"accounts_receivable": 800.0},
+        "excluded",
+        ["receivables plus cash is 50.00% of total assets, FTSE limit is 50%"],
+        None,
+        None,
+    ),
+    (
+        "msci",
+        {},
+        "compliant",
+        [
+            "debt is 5.00% of total assets, MSCI limit is 33.33%",
+            "cash is 10.00% of total assets, MSCI limit is 33.33%",
+            "receivables plus cash is 15.00% of total assets, MSCI limit is 33.33%",
+            "interest income is 2.00% of revenue, MSCI limit is 5%",
+        ],
+        0.02,
+        2025,
+    ),
+    ("msci", {"total_assets": None}, "excluded", ["total assets is missing"], None, None),
+]
+
+
+@pytest.mark.parametrize(
+    ("method", "overrides", "status", "reasons", "interest_ratio", "interest_year"),
+    UNCHANGED,
+)
+def test_results_unchanged_by_ratio_values(
+    method: str,
+    overrides: dict[str, Any],
+    status: str,
+    reasons: list[str],
+    interest_ratio: float | None,
+    interest_year: int | None,
+) -> None:
+    config = {"aaoifi": CONFIG, "ftse": _using(FTSE), "msci": _using(MSCI)}[method]
+
+    result = screen_ratios(_company(**overrides), config)
+
+    assert result.status == status
+    assert result.reasons == reasons
+    assert result.interest_ratio == pytest.approx(interest_ratio)
+    assert result.interest_year == interest_year
+
+
+def test_ratio_values_when_all_pass() -> None:
+    result = screen_ratios(_company(), CONFIG)
+
+    assert result.ratio_values == (
+        RatioValue("debt", pytest.approx(0.10), 0.30, True),
+        RatioValue("cash", pytest.approx(0.20), 0.30, True),
+        RatioValue("interest income", pytest.approx(0.02), 0.05, True),
+    )
+
+
+def test_ratio_values_kept_when_excluded() -> None:
+    # the passing ratios still go on the chart, not just the one that failed
+    result = screen_ratios(_company(total_debt=400.0), CONFIG)
+
+    assert result.status == "excluded"
+    assert [(v.name, v.passed) for v in result.ratio_values] == [
+        ("debt", False),
+        ("cash", True),
+        ("interest income", True),
+    ]
+    assert result.ratio_values[0].ratio == pytest.approx(0.40)
+
+
+def test_ratio_on_the_limit_is_not_passed() -> None:
+    result = screen_ratios(_company(total_debt=300.0), CONFIG)
+
+    assert result.ratio_values[0] == RatioValue("debt", pytest.approx(0.30), 0.30, False)
+
+
+def test_ratio_values_include_receivables_for_ftse() -> None:
+    result = screen_ratios(_company(), _using(FTSE))
+
+    assert [(v.name, v.limit) for v in result.ratio_values] == [
+        ("debt", 0.33333),
+        ("cash", 0.33333),
+        ("receivables plus cash", 0.50),
+        ("interest income", 0.05),
+    ]
+
+
+def test_missing_values_have_no_ratio() -> None:
+    result = screen_ratios(_company(cash_and_short_term_investments=None), CONFIG)
+
+    assert [v.name for v in result.ratio_values] == ["debt", "interest income"]
+
+
+def test_no_ratio_values_without_a_base() -> None:
+    result = screen_ratios(_company(market_cap=None, interest_income_revenue=None), CONFIG)
+
+    assert result.ratio_values == ()
+
+
+def test_older_interest_income_still_has_a_ratio_value() -> None:
+    result = screen_ratios(_company(interest_income_year=2023), CONFIG)
+
+    assert result.ratio_values[-1] == RatioValue(
+        "interest income", pytest.approx(0.02), 0.05, True
+    )
+
+
+def test_undisclosed_interest_income_has_no_ratio_value() -> None:
+    result = screen_ratios(_company(interest_income_year=None), CONFIG)
+
+    assert [v.name for v in result.ratio_values] == ["debt", "cash"]

@@ -10,12 +10,22 @@ Status = Literal["compliant", "doubtful", "excluded"]
 
 
 @dataclass(frozen=True)
+class RatioValue:
+    name: str
+    ratio: float
+    limit: float
+    passed: bool
+
+
+@dataclass(frozen=True)
 class ScreenResult:
     status: Status
     reasons: list[str]
     # only the ratio screen fills these, purification needs the actual number
     interest_ratio: float | None = None
     interest_year: int | None = None
+    # every ratio that could be worked out, so the dashboard can chart them
+    ratio_values: tuple[RatioValue, ...] = ()
 
 
 # Which Yahoo industries each excluded group in config.yaml covers.

@@ -5,7 +5,7 @@ from typing import Literal
 
 from clearsift.config import Denominator, Methodology, ScreeningConfig
 from clearsift.data.models import CompanyFinancials
-from clearsift.screening.business import ScreenResult, Status
+from clearsift.screening.business import RatioValue, ScreenResult, Status
 
 # what each single check found: fine, needs a manual look, or a hard fail
 Outcome = Literal["pass", "doubt", "fail"]
@@ -21,6 +21,7 @@ def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> Scr
     """Check a company's ratios against the limits of the methodology in the config."""
     method = config.methodology
     checks: list[Check] = []
+    values: list[RatioValue] = []
 
     base_name = _DENOMINATOR_NAMES[method.denominator]
     # fail closed: a missing or non-positive base means none of its ratios can be trusted
@@ -31,8 +32,8 @@ def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> Scr
         debt, cash = financials.balance_sheet_debt, financials.balance_sheet_cash
     else:
         debt, cash = financials.total_debt, financials.cash_and_short_term_investments
-    checks += _ratio("debt", debt, base, base_name, method.max_debt, method)
-    checks += _ratio("cash", cash, base, base_name, method.max_cash, method)
+    checks += _ratio("debt", debt, base, base_name, method.max_debt, method, values)
+    checks += _ratio("cash", cash, base, base_name, method.max_cash, method, values)
 
     if method.max_receivables_and_cash is not None:
         receivables = financials.accounts_receivable
@@ -47,21 +48,32 @@ def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> Scr
                 base_name,
                 method.max_receivables_and_cash,
                 method,
+                values,
             )
 
-    interest_checks, interest_ratio = _interest_income(financials, config)
+    interest_checks, interest_ratio = _interest_income(financials, config, values)
     checks += interest_checks
     interest_year = financials.interest_income_year if interest_ratio is not None else None
 
     outcomes = {outcome for outcome, _ in checks}
     if "fail" in outcomes:
-        return ScreenResult("excluded", [reason for outcome, reason in checks if outcome != "pass"])
+        return ScreenResult(
+            "excluded",
+            [reason for outcome, reason in checks if outcome != "pass"],
+            ratio_values=tuple(values),
+        )
     status: Status = "doubtful" if "doubt" in outcomes else "compliant"
-    return ScreenResult(status, [reason for _, reason in checks], interest_ratio, interest_year)
+    return ScreenResult(
+        status,
+        [reason for _, reason in checks],
+        interest_ratio,
+        interest_year,
+        tuple(values),
+    )
 
 
 def _interest_income(
-    financials: CompanyFinancials, config: ScreeningConfig
+    financials: CompanyFinancials, config: ScreeningConfig, values: list[RatioValue]
 ) -> tuple[list[Check], float | None]:
     latest = financials.latest_income_statement_year
     year = financials.interest_income_year
@@ -83,6 +95,7 @@ def _interest_income(
         "revenue" + note,
         config.methodology.max_impermissible_income,
         config.methodology,
+        values,
     )
     # a missing or negative number fails above, so only keep the ratio if nothing did
     income = financials.interest_income
@@ -106,6 +119,7 @@ def _ratio(
     base_name: str,
     limit: float,
     method: Methodology,
+    values: list[RatioValue],
 ) -> list[Check]:
     if value is None or not math.isfinite(value):
         return [("fail", f"{name} is missing")]
@@ -118,6 +132,7 @@ def _ratio(
 
     ratio = value / base
     passed = _within_limit(ratio, limit)
+    values.append(RatioValue(name, ratio, limit, passed))
     shown = _actual_percent(ratio, limit, passed)
     reason = f"{name} is {shown} of {base_name}, {method.label} limit is {_limit_percent(limit)}"
     return [("pass" if passed else "fail", reason)]
