@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
+from typing import Literal
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -14,20 +15,29 @@ from clearsift.dashboard_data import (
     Colour,
     ComparisonCard,
     ErrorCard,
+    NotCheckedCard,
     StockCard,
     chart_rows,
+    holding_card,
+    holding_values,
     load_screening_config,
     parse_tickers,
     screen_cards,
 )
 from clearsift.data.cache import get_financials
+from clearsift.portfolio import fetch_positions, portfolio_summary, review_lines, screen_holdings
 from clearsift.screening.business import RatioValue
+from clearsift.t212.client import T212Client, T212Error
 
 # next to the dashboard folder, so it works whichever folder streamlit is run from
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 # streamlit has no amber, orange is the nearest
-BADGE_COLOURS: dict[Colour, str] = {"green": "green", "amber": "orange", "red": "red"}
+BADGE_COLOURS: dict[Colour, Literal["green", "orange", "red"]] = {
+    "green": "green",
+    "amber": "orange",
+    "red": "red",
+}
 
 
 @st.cache_resource
@@ -38,14 +48,18 @@ def load_config() -> ScreeningConfig:
 
 def main() -> None:
     """Draw the dashboard."""
-    st.set_page_config(page_title="Clearsift", page_icon=":material/filter_alt:")
+    st.set_page_config(page_title="Clearsift", page_icon=":material/filter_alt:", layout="wide")
+    page = st.sidebar.radio("Page", ["Screener", "My portfolio"])
     st.title("Clearsift")
     try:
         config = load_config()
     except ConfigError as exc:
         st.error(f"config.yaml has a problem: {exc}")
         st.stop()
-    screener_page(config)
+    if page == "My portfolio":
+        portfolio_page(config)
+    else:
+        screener_page(config)
 
 
 def screener_page(config: ScreeningConfig) -> None:
@@ -73,21 +87,75 @@ def screener_page(config: ScreeningConfig) -> None:
         show_card(card)
 
 
-def show_card(card: Card) -> None:
+def portfolio_page(config: ScreeningConfig) -> None:
+    """Load the Trading 212 positions when asked, then screen and show each one."""
+    st.header("My portfolio")
+    st.caption(
+        f"{config.methodology.label} standard, {config.mode} mode. "
+        "Read-only, nothing here can place, change or cancel an order."
+    )
+
+    # outside the button, so switching it on doesn't fetch everything again
+    show_values = st.toggle("Show values")
+    if st.button("Load portfolio", type="primary"):
+        # drop the last load first, so an error never sits next to old results
+        st.session_state.pop("holdings", None)
+        try:
+            with st.spinner("Loading positions from Trading 212..."):
+                positions = fetch_positions(T212Client.from_env)
+        except T212Error as exc:
+            # these messages never hold the key, secret or response body
+            st.error(f"Trading 212 error: {exc}")
+            return
+        try:
+            with st.spinner("Screening..."):
+                st.session_state.holdings = screen_holdings(positions, config)
+        except ValueError as exc:
+            st.error(f"Screening error: {exc}")
+            return
+
+    holdings = st.session_state.get("holdings")
+    if holdings is None:
+        st.info("Click Load portfolio to read your open positions from Trading 212.")
+        return
+    if not holdings:
+        st.info("No open positions.")
+        return
+
+    st.subheader(portfolio_summary(holdings))
+    for holding in holdings:
+        values = holding_values(holding.position) if show_values else None
+        show_card(holding_card(holding), values)
+
+    st.subheader("Review")
+    review = review_lines(holdings)
+    if review:
+        _bullets(review)
+    else:
+        st.success("Nothing to review.")
+
+
+def show_card(card: Card, values: list[tuple[str, str]] | None = None) -> None:
     """Draw one card, whichever kind it is."""
     with st.container(border=True):
         if isinstance(card, ErrorCard):
-            st.subheader(card.ticker)
+            st.subheader(_escape(card.ticker))
             st.error(card.message)
+        elif isinstance(card, NotCheckedCard):
+            st.subheader(_escape(card.ticker))
+            st.badge("NOT CHECKED", color="orange")
+            _values(values)
+            st.warning(card.message)
         elif isinstance(card, ComparisonCard):
             show_comparison(card)
         else:
-            show_stock(card)
+            show_stock(card, values)
 
 
-def show_stock(card: StockCard) -> None:
+def show_stock(card: StockCard, values: list[tuple[str, str]] | None = None) -> None:
     """Draw a card for one stock under one standard."""
     _heading(card.ticker, card.result, card.colour, card.company)
+    _values(values)
     _warnings(card.warnings)
     if card.purification:
         st.markdown(_escape(card.purification))
@@ -118,10 +186,15 @@ def show_comparison(card: ComparisonCard) -> None:
 
 
 def _heading(ticker: str, result: str, colour: Colour, company: list[str]) -> None:
-    st.subheader(ticker)
+    st.subheader(_escape(ticker))
     st.badge(result, color=BADGE_COLOURS[colour])
     for line in company:
         st.caption(_escape(line))
+
+
+def _values(values: list[tuple[str, str]] | None) -> None:
+    if values:
+        st.markdown("  \n".join(f"**{name}:** {_escape(value)}" for name, value in values))
 
 
 def _warnings(warnings: list[str]) -> None:

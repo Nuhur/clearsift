@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -18,8 +18,10 @@ from clearsift.cli import (
 from clearsift.config import ConfigError, ScreeningConfig, load_config
 from clearsift.data.cache import get_financials
 from clearsift.data.models import CompanyFinancials
+from clearsift.portfolio import NOT_CONVERTED, Holding, quantity_text
 from clearsift.screening.business import RatioValue, check_excluded_sectors
 from clearsift.screening.screen import StockVerdict, compare_stock, screen_stock
+from clearsift.t212.models import Position
 
 Colour = Literal["green", "amber", "red"]
 
@@ -73,7 +75,13 @@ class ErrorCard:
     message: str
 
 
-Card = StockCard | ComparisonCard | ErrorCard
+@dataclass(frozen=True)
+class NotCheckedCard:
+    ticker: str
+    message: str
+
+
+Card = StockCard | ComparisonCard | ErrorCard | NotCheckedCard
 
 
 @dataclass(frozen=True)
@@ -176,6 +184,31 @@ def screen_cards(
             # one bad ticker shouldn't stop the others from showing
             cards.append(ErrorCard(ticker.strip().upper(), str(exc)))
     return cards
+
+
+def holding_card(holding: Holding) -> StockCard | NotCheckedCard:
+    """Turn one holding into a card, titled with both tickers."""
+    if holding.verdict is None:
+        return NotCheckedCard(holding.title, NOT_CONVERTED)
+    return replace(stock_card(holding.verdict), ticker=holding.title)
+
+
+def holding_values(position: Position) -> list[tuple[str, str]]:
+    """List a holding's quantity and prices, for when values are switched on."""
+    return [
+        ("Quantity", quantity_text(position.quantity)),
+        ("Average price", _price(position.average_price, position.currency)),
+        ("Current price", _price(position.current_price, position.currency)),
+    ]
+
+
+def _price(price: float | None, currency: str | None) -> str:
+    if price is None:
+        return "unknown"
+    # at least 2 places like money, but up to 4 so a 0.0345 share doesn't show as 0.03
+    whole, fraction = f"{price:,.4f}".split(".")
+    text = f"{whole}.{fraction.rstrip('0').ljust(2, '0')}"
+    return f"{text} {currency}" if currency else text
 
 
 def chart_rows(ratios: Sequence[RatioValue]) -> list[ChartRow]:

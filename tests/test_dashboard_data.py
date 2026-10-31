@@ -12,18 +12,23 @@ from clearsift.dashboard_data import (
     COLOURS,
     ComparisonCard,
     ErrorCard,
+    NotCheckedCard,
     StockCard,
     chart_rows,
     colour,
     comparison_card,
+    holding_card,
+    holding_values,
     load_screening_config,
     parse_tickers,
     screen_cards,
     stock_card,
 )
 from clearsift.data.models import CompanyFinancials
+from clearsift.portfolio import Holding, screen_holdings
 from clearsift.screening.business import RatioValue
 from clearsift.screening.screen import compare_stock, screen_stock
+from clearsift.t212.models import Position
 
 CONFIG: dict[str, Any] = {
     "screening": {
@@ -426,3 +431,97 @@ def test_chart_axis_with_zero_limit_and_value() -> None:
 
 def test_chart_rows_empty() -> None:
     assert chart_rows([]) == []
+
+
+# holding_card
+
+
+def _position(
+    ticker: str | None,
+    quantity: float | None = 2.0,
+    average_price: float | None = 321.5,
+    current_price: float | None = 987.25,
+    currency: str | None = "USD",
+) -> Position:
+    return Position(
+        ticker=ticker,
+        quantity=quantity,
+        average_price=average_price,
+        current_price=current_price,
+        currency=currency,
+    )
+
+
+def _holding(config: ScreeningConfig, ticker: str, data: dict[str, dict[str, Any]]) -> Holding:
+    (holding,) = screen_holdings([_position(ticker)], config, get=FakeGet(data))
+    return holding
+
+
+def test_holding_card_titled_with_both_tickers(strict: ScreeningConfig) -> None:
+    card = holding_card(_holding(strict, "MO_US_EQ", {"MO": TOBACCO}))
+
+    assert isinstance(card, StockCard)
+    assert card.ticker == "MO (MO_US_EQ)"
+    assert card.result == "FAIL (excluded)"
+    assert card.colour == "red"
+
+
+def test_holding_card_matches_screener_card(strict: ScreeningConfig) -> None:
+    holding = _holding(strict, "MSFT_US_EQ", {"MSFT": GOOD})
+
+    card = holding_card(holding)
+
+    assert card == replace(_screen(strict, GOOD, ticker="MSFT"), ticker="MSFT (MSFT_US_EQ)")
+
+
+def test_holding_card_not_checked(strict: ScreeningConfig) -> None:
+    card = holding_card(_holding(strict, "SAPd_EQ", {}))
+
+    assert card == NotCheckedCard("SAPd_EQ", "couldn't convert ticker, check by hand")
+
+
+def test_holding_card_has_no_money_values(strict: ScreeningConfig) -> None:
+    # values only show when switched on, so the card itself mustn't carry them
+    for ticker in ("MSFT_US_EQ", "SAPd_EQ"):
+        text = repr(holding_card(_holding(strict, ticker, {"MSFT": GOOD})))
+
+        assert "321.5" not in text
+        assert "987.25" not in text
+        assert "USD" not in text
+
+
+# holding_values
+
+
+def test_holding_values() -> None:
+    assert holding_values(_position("MSFT_US_EQ", quantity=3.5)) == [
+        ("Quantity", "3.5"),
+        ("Average price", "321.50 USD"),
+        ("Current price", "987.25 USD"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("price", "expected"),
+    [
+        (5.0, "5.00 GBX"),
+        (1234.5, "1,234.50 GBX"),
+        (0.0345, "0.0345 GBX"),
+        (12.34567, "12.3457 GBX"),
+        (None, "unknown"),
+    ],
+)
+def test_holding_values_prices(price: float | None, expected: str) -> None:
+    values = holding_values(_position("VODl_EQ", average_price=price, currency="GBX"))
+
+    assert values[1] == ("Average price", expected)
+
+
+def test_holding_values_unknown_quantity_and_currency() -> None:
+    values = holding_values(_position("ABC_US_EQ", quantity=None, currency=None))
+
+    assert values == [
+        ("Quantity", "unknown"),
+        ("Average price", "321.50"),
+        ("Current price", "987.25"),
+    ]
