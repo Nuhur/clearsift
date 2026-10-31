@@ -1,5 +1,6 @@
 import copy
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -7,9 +8,22 @@ from typing import Any
 import pytest
 import yaml
 
-from clearsift.cli import main
+from clearsift.cli import (
+    BUSINESS_WARNING,
+    INTEREST_WARNING,
+    business_warning,
+    company_lines,
+    interest_warning,
+    main,
+    pass_fail,
+    purification_line,
+    standards_summary,
+    warnings,
+)
+from clearsift.config import load_config
 from clearsift.data.cache import get_financials, load_financials, save_financials
 from clearsift.data.models import CompanyFinancials
+from clearsift.screening.screen import StockVerdict, compare_stock, screen_stock
 
 CONFIG: dict[str, Any] = {
     "screening": {
@@ -606,3 +620,98 @@ def test_compare_older_interest_income_warning(
     assert "  AAOIFI: FAIL (doubtful)" in out
     assert "    check by hand: interest income isn't in the latest report" in out
     assert "passes under 0 of 3 standards" in out
+
+
+# the text helpers the dashboard shares, checked on their own without the indent
+
+
+def _verdict(path: Path, data: dict[str, Any], mode: str = "strict") -> StockVerdict:
+    config = replace(load_config(path).screening, mode=mode)
+    return screen_stock("ABC", config, get=FakeGet({"ABC": data}))
+
+
+def test_company_lines(config_path: Path) -> None:
+    assert company_lines(_verdict(config_path, GOOD)) == ["Technology / Software - Infrastructure"]
+
+
+def test_company_lines_for_fund(config_path: Path) -> None:
+    assert company_lines(_verdict(config_path, ETF)) == ["fund (ETF)"]
+
+
+def test_company_lines_no_data(config_path: Path) -> None:
+    assert company_lines(_verdict(config_path, {})) == [
+        "unknown / unknown",
+        "no data from yfinance, try again later",
+    ]
+
+
+def test_purification_line(config_path: Path) -> None:
+    assert purification_line(_verdict(config_path, GOOD)) == "purify 2.00% of dividends"
+
+
+def test_purification_line_for_fund(config_path: Path) -> None:
+    assert (
+        purification_line(_verdict(config_path, ETF))
+        == "purification: check the fund's own reports"
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (GOOD, "PASS (compliant)"),
+        (GROCER, "FAIL (doubtful)"),
+        ({**GOOD, "total_debt": 400.0}, "FAIL (excluded)"),
+    ],
+)
+def test_pass_fail(config_path: Path, data: dict[str, Any], expected: str) -> None:
+    assert pass_fail(_verdict(config_path, data)) == expected
+
+
+def test_pass_fail_doubtful_passes_in_standard_mode(config_path: Path) -> None:
+    assert pass_fail(_verdict(config_path, GROCER, mode="standard")) == "PASS (doubtful)"
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (GOOD, []),
+        (GROCER, [BUSINESS_WARNING]),
+        ({**GOOD, "interest_income_year": 2023}, [INTEREST_WARNING]),
+        ({**GROCER, "interest_income_year": 2023}, [BUSINESS_WARNING, INTEREST_WARNING]),
+        # excluded on debt, so there's nothing left to check by hand
+        ({**GROCER, "total_debt": 400.0}, []),
+        # a fund's own reason says what to check
+        (ETF, []),
+    ],
+)
+def test_warnings(config_path: Path, data: dict[str, Any], expected: list[str]) -> None:
+    assert warnings(_verdict(config_path, data)) == expected
+
+
+def test_business_warning_shown_even_when_excluded(config_path: Path) -> None:
+    # the comparison shows it once for every standard, whatever the ratios did
+    verdict = _verdict(config_path, {**GROCER, "total_debt": 400.0})
+
+    assert business_warning(verdict) == BUSINESS_WARNING
+
+
+def test_business_warning_none_for_clean_business(config_path: Path) -> None:
+    assert business_warning(_verdict(config_path, GOOD)) is None
+
+
+def test_interest_warning(config_path: Path) -> None:
+    older = _verdict(config_path, {**GOOD, "interest_income_year": 2023})
+
+    assert interest_warning(older) == INTEREST_WARNING
+    assert interest_warning(_verdict(config_path, GOOD)) is None
+
+
+def test_standards_summary(three_standards: Path) -> None:
+    config = load_config(three_standards).screening
+    # fails AAOIFI on debt but passes the two that use total assets
+    get = FakeGet({"ABC": {**GOOD, "total_debt": 400.0}})
+
+    verdicts = compare_stock("ABC", config, get=get)
+
+    assert standards_summary(verdicts) == "passes under 2 of 3 standards"
