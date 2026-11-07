@@ -1,0 +1,448 @@
+import copy
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+from fastapi.testclient import TestClient
+
+from clearsift.api import create_app
+from clearsift.api.app import GENERIC_ERROR, clean_ticker
+from clearsift.api.schemas import (
+    comparison_out,
+    prices_out,
+    ratios_out,
+    verdict_out,
+)
+from clearsift.cli import BUSINESS_WARNING
+from clearsift.config import load_config
+from clearsift.data.models import CompanyFinancials
+from clearsift.data.prices import PricePoint
+from clearsift.screening.business import RatioValue
+from clearsift.screening.screen import compare_stock, screen_stock
+
+CONFIG: dict[str, Any] = {
+    "screening": {
+        "mode": "standard",
+        "fail_closed": True,
+        "max_data_age_days": 120,
+        "market_cap_max_age_days": 1,
+        "max_interest_income_age_years": 3,
+        "methodology": "aaoifi",
+        "methodologies": {
+            "aaoifi": {
+                "denominator": "market_cap",
+                "max_debt": 0.30,
+                "max_cash": 0.30,
+                "max_receivables_and_cash": None,
+                "max_impermissible_income": 0.05,
+            },
+            "ftse": {
+                "denominator": "total_assets",
+                "max_debt": 0.33333,
+                "max_cash": 0.33333,
+                "max_receivables_and_cash": 0.50,
+                "max_impermissible_income": 0.05,
+            },
+        },
+        "excluded_sectors": ["alcohol", "tobacco"],
+        "always_exclude_tickers": [],
+        "approved_funds": [],
+    },
+    "benchmark": {"ticker": None},
+}
+
+# a software company with every ratio well under its limit
+GOOD: dict[str, Any] = {
+    "sector": "Technology",
+    "industry": "Software - Infrastructure",
+    "market_cap": 1000.0,
+    "total_debt": 100.0,
+    "cash_and_short_term_investments": 200.0,
+    "total_revenue": 500.0,
+    "interest_income_revenue": 500.0,
+    "interest_income_year": 2025,
+    "latest_income_statement_year": 2025,
+    "total_assets": 2000.0,
+    "accounts_receivable": 100.0,
+    "balance_sheet_debt": 100.0,
+    "balance_sheet_cash": 200.0,
+    "interest_income": 10.0,
+}
+GROCER = {**GOOD, "sector": "Consumer Defensive", "industry": "Grocery Stores"}
+TOBACCO = {**GOOD, "sector": "Consumer Defensive", "industry": "Tobacco"}
+# passes AAOIFI (debt over market cap) but fails FTSE (debt over total assets)
+SPLIT = {**GOOD, "market_cap": 10_000.0, "balance_sheet_debt": 1000.0}
+
+DATA = {"MSFT": GOOD, "KR": GROCER, "MO": TOBACCO, "SPLT": SPLIT}
+PRICES = [PricePoint(date(2026, 5, 28), 101.5), PricePoint(date(2026, 5, 29), 102.25)]
+
+
+class FakeGet:
+    """Stands in for get_financials, with made-up data for each ticker."""
+
+    def __init__(self, data: dict[str, dict[str, Any]]) -> None:
+        self.data = data
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __call__(self, ticker: str, **kwargs: Any) -> CompanyFinancials:
+        self.calls.append((ticker, kwargs))
+        return CompanyFinancials(ticker=ticker, **self.data.get(ticker, {}))
+
+
+class FakePrices:
+    """Stands in for get_closes."""
+
+    def __init__(self, result: list[PricePoint] | Exception) -> None:
+        self.result = result
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __call__(self, ticker: str, **kwargs: Any) -> list[PricePoint]:
+        self.calls.append((ticker, kwargs))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def no_client() -> Any:
+    raise AssertionError("the screening routes should never talk to Trading 212")
+
+
+def _write(tmp_path: Path, data: dict[str, Any]) -> Path:
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def _client(
+    tmp_path: Path,
+    get: Any = None,
+    prices: Any = None,
+    config: dict[str, Any] = CONFIG,
+) -> TestClient:
+    app = create_app(
+        _write(tmp_path, config),
+        get=get or FakeGet(DATA),
+        make_client=no_client,
+        get_prices=prices or FakePrices(PRICES),
+    )
+    # so a crash comes back as a response we can check, like it would in the browser
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def client(tmp_path: Path) -> TestClient:
+    return _client(tmp_path)
+
+
+# clean_ticker
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("aapl", "AAPL"),
+        (" msft ", "MSFT"),
+        ("brk-b", "BRK-B"),
+        ("vod.l", "VOD.L"),
+        ("^gspc", "^GSPC"),
+        ("gbpusd=x", "GBPUSD=X"),
+    ],
+)
+def test_clean_ticker_good(text: str, expected: str) -> None:
+    assert clean_ticker(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "   ", "../etc", "A B", "AAPL;", "<script>", "A" * 21, ".L"])
+def test_clean_ticker_bad(text: str) -> None:
+    assert clean_ticker(text) is None
+
+
+# schema helpers
+
+
+def test_ratios_out() -> None:
+    out = ratios_out([RatioValue("debt", 0.1, 0.3, True)])
+
+    assert [r.model_dump() for r in out] == [
+        {"name": "debt", "value": 0.1, "limit": 0.3, "passed": True}
+    ]
+
+
+def test_verdict_out(tmp_path: Path) -> None:
+    config = load_config(_write(tmp_path, CONFIG)).screening
+    out = verdict_out(screen_stock("KR", config, get=FakeGet(DATA)))
+
+    assert out.status == "doubtful"
+    assert out.passes is True
+    assert out.result == "PASS (doubtful)"
+    assert out.colour == "amber"
+    assert out.warnings == [BUSINESS_WARNING]
+    assert out.methodology == "AAOIFI"
+
+
+def test_comparison_out_follows_the_chosen_standard(tmp_path: Path) -> None:
+    config = load_config(_write(tmp_path, CONFIG)).screening
+    verdicts = compare_stock("SPLT", config, get=FakeGet(DATA))
+    out = comparison_out(verdicts, "FTSE")
+
+    assert out.methodology == "FTSE"
+    assert out.passes is False
+    assert [(s.methodology, s.passes) for s in out.standards] == [("AAOIFI", True), ("FTSE", False)]
+    assert out.summary == "passes under 1 of 2 standards"
+
+
+def test_prices_out() -> None:
+    out = prices_out(PRICES)
+
+    assert out[0].model_dump() == {"date": date(2026, 5, 28), "close": 101.5}
+
+
+# /api/health
+
+
+def test_health(client: TestClient) -> None:
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+# /api/screen
+
+
+def test_screen_one_ticker(client: TestClient) -> None:
+    response = client.get("/api/screen", params={"tickers": "msft"})
+
+    assert response.status_code == 200
+    [result] = response.json()["results"]
+    assert result["kind"] == "verdict"
+    assert result["ticker"] == "MSFT"
+    assert result["status"] == "compliant"
+    assert result["passes"] is True
+    assert result["result"] == "PASS (compliant)"
+    assert result["company"] == ["Technology / Software - Infrastructure"]
+    assert result["purification"] == "purify 2.00% of dividends"
+    assert result["warnings"] == []
+    assert result["reasons"]
+    assert {"name": "debt", "value": 0.1, "limit": 0.3, "passed": True} in result["ratios"]
+
+
+def test_screen_several_tickers_in_order(client: TestClient) -> None:
+    response = client.get("/api/screen", params={"tickers": "MO, KR msft,KR"})
+
+    results = response.json()["results"]
+    assert [r["ticker"] for r in results] == ["MO", "KR", "MSFT"]
+    assert [r["passes"] for r in results] == [False, True, True]
+    # a failing stock gets nothing to purify
+    assert results[0]["purification"] is None
+    assert results[0]["colour"] == "red"
+
+
+def test_screen_compare(client: TestClient) -> None:
+    response = client.get("/api/screen", params={"tickers": "SPLT", "compare": "true"})
+
+    [result] = response.json()["results"]
+    assert result["kind"] == "comparison"
+    assert result["methodology"] == "AAOIFI"
+    assert result["passes"] is True
+    assert [s["methodology"] for s in result["standards"]] == ["AAOIFI", "FTSE"]
+    assert [s["passes"] for s in result["standards"]] == [True, False]
+    assert result["standards"][1]["ratios"]
+    assert result["summary"] == "passes under 1 of 2 standards"
+
+
+def test_screen_missing_data_is_excluded(client: TestClient) -> None:
+    response = client.get("/api/screen", params={"tickers": "NODATA"})
+
+    [result] = response.json()["results"]
+    assert result["status"] == "excluded"
+    assert result["passes"] is False
+    assert "no data from yfinance, try again later" in result["company"]
+
+
+def test_screen_bad_ticker_next_to_a_good_one(tmp_path: Path) -> None:
+    get = FakeGet(DATA)
+    client = _client(tmp_path, get=get)
+
+    response = client.get("/api/screen", params={"tickers": "<script>,MSFT"})
+
+    assert response.status_code == 200
+    bad, good = response.json()["results"]
+    assert bad == {
+        "kind": "error",
+        "ticker": "<SCRIPT>",
+        "message": "that doesn't look like a ticker",
+    }
+    assert good["passes"] is True
+    # the bad one never got as far as yfinance
+    assert [ticker for ticker, _ in get.calls] == ["MSFT"]
+
+
+def test_screen_value_error_only_hits_that_ticker(tmp_path: Path) -> None:
+    class Picky(FakeGet):
+        def __call__(self, ticker: str, **kwargs: Any) -> CompanyFinancials:
+            if ticker == "MO":
+                raise ValueError("bad mapping for MO")
+            return super().__call__(ticker, **kwargs)
+
+    client = _client(tmp_path, get=Picky(DATA))
+    response = client.get("/api/screen", params={"tickers": "MO,MSFT"})
+
+    bad, good = response.json()["results"]
+    assert bad == {"kind": "error", "ticker": "MO", "message": "bad mapping for MO"}
+    assert good["kind"] == "verdict"
+
+
+def test_screen_refresh_reaches_get(tmp_path: Path) -> None:
+    get = FakeGet(DATA)
+    client = _client(tmp_path, get=get)
+
+    client.get("/api/screen", params={"tickers": "MSFT"})
+    client.get("/api/screen", params={"tickers": "MSFT", "refresh": "true"})
+
+    assert "refresh" not in get.calls[0][1]
+    assert get.calls[1][1]["refresh"] is True
+
+
+@pytest.mark.parametrize("tickers", ["", " , ,"])
+def test_screen_no_tickers(client: TestClient, tickers: str) -> None:
+    response = client.get("/api/screen", params={"tickers": tickers})
+
+    assert response.status_code == 400
+    assert response.json() == {"message": "give at least one ticker"}
+
+
+def test_screen_tickers_left_out(client: TestClient) -> None:
+    response = client.get("/api/screen")
+
+    assert response.status_code == 422
+    assert response.json() == {"message": "bad or missing parameter: tickers"}
+
+
+def test_screen_bad_flag_does_not_echo_it_back(client: TestClient) -> None:
+    response = client.get("/api/screen", params={"tickers": "MSFT", "compare": "<b>sneaky</b>"})
+
+    assert response.status_code == 422
+    assert response.json() == {"message": "bad or missing parameter: compare"}
+
+
+def test_screen_broken_config(tmp_path: Path) -> None:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["mode"] = "relaxed"
+    client = _client(tmp_path, config=data)
+
+    response = client.get("/api/screen", params={"tickers": "MSFT"})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "message": "config error: screening.mode must be 'strict' or 'standard'"
+    }
+
+
+def test_screen_unmapped_sector_is_a_config_error(tmp_path: Path) -> None:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["excluded_sectors"] = ["alcohol", "crypto"]
+    client = _client(tmp_path, config=data)
+
+    response = client.get("/api/screen", params={"tickers": "MSFT"})
+
+    assert response.status_code == 500
+    assert response.json()["message"].startswith("config error: ")
+    assert "crypto" in response.json()["message"]
+
+
+def test_screen_crash_gives_a_safe_message(tmp_path: Path) -> None:
+    def crash(ticker: str, **kwargs: Any) -> CompanyFinancials:
+        raise RuntimeError("secret-key-123 in a traceback")
+
+    client = _client(tmp_path, get=crash)
+    response = client.get("/api/screen", params={"tickers": "MSFT"})
+
+    assert response.status_code == 500
+    assert response.json() == {"message": GENERIC_ERROR}
+    assert "secret-key-123" not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_unknown_route_uses_the_same_error_shape(client: TestClient) -> None:
+    response = client.get("/api/nope")
+
+    assert response.status_code == 404
+    assert response.json() == {"message": "Not Found"}
+
+
+# /api/stocks/{ticker}
+
+
+def test_stock_detail(tmp_path: Path) -> None:
+    prices = FakePrices(PRICES)
+    client = _client(tmp_path, prices=prices)
+
+    response = client.get("/api/stocks/splt")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ticker"] == "SPLT"
+    assert body["verdict"]["kind"] == "comparison"
+    assert body["verdict"]["passes"] is True
+    assert [s["methodology"] for s in body["verdict"]["standards"]] == ["AAOIFI", "FTSE"]
+    assert body["prices"] == [
+        {"date": "2026-05-28", "close": 101.5},
+        {"date": "2026-05-29", "close": 102.25},
+    ]
+    assert prices.calls == [("SPLT", {"refresh": False})]
+
+
+def test_stock_detail_refresh(tmp_path: Path) -> None:
+    get = FakeGet(DATA)
+    prices = FakePrices(PRICES)
+    client = _client(tmp_path, get=get, prices=prices)
+
+    client.get("/api/stocks/MSFT", params={"refresh": "true"})
+
+    assert get.calls[0][1]["refresh"] is True
+    assert prices.calls == [("MSFT", {"refresh": True})]
+
+
+def test_stock_detail_no_prices(tmp_path: Path) -> None:
+    client = _client(tmp_path, prices=FakePrices([]))
+
+    response = client.get("/api/stocks/MSFT")
+
+    assert response.status_code == 200
+    assert response.json()["prices"] == []
+
+
+def test_stock_detail_broken_prices_still_shows_verdict(tmp_path: Path) -> None:
+    client = _client(tmp_path, prices=FakePrices(RuntimeError("disk on fire")))
+
+    response = client.get("/api/stocks/MSFT")
+
+    assert response.status_code == 200
+    assert response.json()["verdict"]["passes"] is True
+    assert response.json()["prices"] == []
+    assert "disk on fire" not in response.text
+
+
+def test_stock_detail_bad_ticker(tmp_path: Path) -> None:
+    get = FakeGet(DATA)
+    client = _client(tmp_path, get=get)
+
+    response = client.get("/api/stocks/AAPL;DROP")
+
+    assert response.status_code == 400
+    assert response.json() == {"message": "that doesn't look like a ticker"}
+    assert get.calls == []
+
+
+def test_stock_detail_value_error(tmp_path: Path) -> None:
+    def picky(ticker: str, **kwargs: Any) -> CompanyFinancials:
+        raise ValueError("bad mapping")
+
+    client = _client(tmp_path, get=picky)
+    response = client.get("/api/stocks/MSFT")
+
+    assert response.status_code == 500
+    assert response.json() == {"message": "bad mapping"}

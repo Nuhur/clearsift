@@ -21,6 +21,10 @@ dependencies = [
 clearsift = "clearsift.cli:main"
 
 [project.optional-dependencies]
+api = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 dashboard = [
     "plotly>=5.20",
     "streamlit>=1.45",
