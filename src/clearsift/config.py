@@ -37,6 +37,8 @@ class ScreeningConfig:
     max_data_age_days: int
     market_cap_max_age_days: int
     max_interest_income_age_years: int
+    # an older year's interest income under the limit passes, instead of needing a check
+    trust_older_interest_income: bool
     # the one used for screening, plus every one in the config for comparing
     methodology: Methodology
     methodologies: tuple[Methodology, ...]
@@ -79,6 +81,10 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             "screening.market_cap_max_age_days can't be bigger than max_data_age_days"
         )
     interest_income_max_age = _days(screening, "max_interest_income_age_years")
+    trust_older = screening.get("trust_older_interest_income")
+    # no default: guessing either way would quietly change which stocks get in
+    if not isinstance(trust_older, bool):
+        raise ConfigError("screening.trust_older_interest_income must be true or false")
 
     raw_methodologies = _section(screening.get("methodologies"), "screening.methodologies")
     if not raw_methodologies:
@@ -115,6 +121,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             max_data_age_days=max_age,
             market_cap_max_age_days=market_cap_max_age,
             max_interest_income_age_years=interest_income_max_age,
+            trust_older_interest_income=trust_older,
             methodology=by_name[chosen],
             methodologies=methodologies,
             excluded_sectors=tuple(s.strip() for s in sectors),

@@ -33,6 +33,7 @@ CONFIG: dict[str, Any] = {
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
         "max_interest_income_age_years": 3,
+        "trust_older_interest_income": True,
         "methodology": "aaoifi",
         "methodologies": {
             "aaoifi": {
@@ -158,10 +159,21 @@ def test_doubtful_passes_with_warning_in_standard_mode(
 OLDER_YEAR_WARNING = "  check by hand: interest income isn't in the latest report"
 
 
-def test_older_interest_income_fails_in_strict_mode(
-    config_path: Path, capsys: pytest.CaptureFixture[str]
+def _untrusting_config(tmp_path: Path, mode: str = "strict") -> Path:
+    # the old rule, where an older year's interest income always needs a check
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["mode"] = mode
+    data["screening"]["trust_older_interest_income"] = False
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def test_older_interest_income_fails_in_strict_mode_when_not_trusted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code = _run(config_path, "AAPL", data={"AAPL": {**GOOD, "interest_income_year": 2023}})
+    path = _untrusting_config(tmp_path)
+    code = _run(path, "AAPL", data={"AAPL": {**GOOD, "interest_income_year": 2023}})
 
     out = capsys.readouterr().out
     assert code == 1
@@ -170,13 +182,10 @@ def test_older_interest_income_fails_in_strict_mode(
     assert "(from 2023, newer years not reported)" in out
 
 
-def test_older_interest_income_passes_with_warning_in_standard_mode(
+def test_older_interest_income_passes_with_warning_in_standard_mode_when_not_trusted(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    data = copy.deepcopy(CONFIG)
-    data["screening"]["mode"] = "standard"
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    path = _untrusting_config(tmp_path, mode="standard")
 
     code = _run(path, "AAPL", data={"AAPL": {**GOOD, "interest_income_year": 2023}})
 
@@ -609,10 +618,13 @@ def test_without_refresh_cache_is_used(tmp_path: Path, config_path: Path) -> Non
     assert fetched == []
 
 
-def test_compare_older_interest_income_warning(
+def test_compare_older_interest_income_warning_when_not_trusted(
     three_standards: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     company = {**GOOD, "interest_income_year": 2023}
+    data = yaml.safe_load(three_standards.read_text(encoding="utf-8"))
+    data["screening"]["trust_older_interest_income"] = False
+    three_standards.write_text(yaml.safe_dump(data), encoding="utf-8")
 
     _compare(three_standards, "AAPL", data={"AAPL": company})
 
@@ -626,8 +638,10 @@ def test_compare_older_interest_income_warning(
 # the text helpers the dashboard shares, checked on their own without the indent
 
 
-def _verdict(path: Path, data: dict[str, Any], mode: str = "strict") -> StockVerdict:
-    config = replace(load_config(path).screening, mode=mode)
+def _verdict(
+    path: Path, data: dict[str, Any], mode: str = "strict", trust: bool = True
+) -> StockVerdict:
+    config = replace(load_config(path).screening, mode=mode, trust_older_interest_income=trust)
     return screen_stock("ABC", config, get=FakeGet({"ABC": data}))
 
 
@@ -678,8 +692,10 @@ def test_pass_fail_doubtful_passes_in_standard_mode(config_path: Path) -> None:
     [
         (GOOD, []),
         (GROCER, [BUSINESS_WARNING]),
-        ({**GOOD, "interest_income_year": 2023}, [INTEREST_WARNING]),
-        ({**GROCER, "interest_income_year": 2023}, [BUSINESS_WARNING, INTEREST_WARNING]),
+        # a trusted older year passes, so it's nothing to check
+        ({**GOOD, "interest_income_year": 2023}, []),
+        ({**GROCER, "interest_income_year": 2023}, [BUSINESS_WARNING]),
+        ({**GOOD, "interest_income_year": None}, [INTEREST_WARNING]),
         # excluded on debt, so there's nothing left to check by hand
         ({**GROCER, "total_debt": 400.0}, []),
         # a fund's own reason says what to check
@@ -702,7 +718,7 @@ def test_business_warning_none_for_clean_business(config_path: Path) -> None:
 
 
 def test_interest_warning(config_path: Path) -> None:
-    older = _verdict(config_path, {**GOOD, "interest_income_year": 2023})
+    older = _verdict(config_path, {**GOOD, "interest_income_year": 2023}, trust=False)
 
     assert interest_warning(older) == INTEREST_WARNING
     assert interest_warning(_verdict(config_path, GOOD)) is None
@@ -779,3 +795,34 @@ def test_serve_has_no_host_option() -> None:
     # it only ever listens on this machine, so there's no flag to change that
     with pytest.raises(SystemExit):
         main(["serve", "--host", "0.0.0.0"])
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({**GOOD, "interest_income_year": 2023}, [INTEREST_WARNING]),
+        ({**GROCER, "interest_income_year": 2023}, [BUSINESS_WARNING, INTEREST_WARNING]),
+    ],
+)
+def test_warnings_when_older_year_not_trusted(
+    config_path: Path, data: dict[str, Any], expected: list[str]
+) -> None:
+    assert warnings(_verdict(config_path, data, trust=False)) == expected
+
+
+def test_no_interest_warning_for_trusted_older_year(config_path: Path) -> None:
+    assert interest_warning(_verdict(config_path, {**GOOD, "interest_income_year": 2023})) is None
+
+
+def test_trusted_older_interest_income_passes_in_strict_mode(
+    config_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = _run(config_path, "AAPL", data={"AAPL": {**GOOD, "interest_income_year": 2023}})
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "AAPL: PASS (compliant)" in out
+    assert OLDER_YEAR_WARNING not in out
+    # the reason still says where the figure came from
+    assert "(from 2023, newer years not reported)" in out
+    assert "  purify 2.00% of dividends (based on 2023)" in out

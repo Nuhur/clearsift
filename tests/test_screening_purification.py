@@ -25,6 +25,7 @@ STRICT = ScreeningConfig(
     max_data_age_days=120,
     market_cap_max_age_days=1,
     max_interest_income_age_years=3,
+    trust_older_interest_income=True,
     methodology=AAOIFI,
     methodologies=(AAOIFI,),
     excluded_sectors=("alcohol", "tobacco"),
@@ -85,7 +86,8 @@ def test_ratio_none_for_failed_stock() -> None:
 
 
 def test_ratio_none_for_doubtful_stock_in_strict_mode() -> None:
-    verdict = _verdict(interest_income_year=2023)
+    untrusting = replace(STRICT, trust_older_interest_income=False)
+    verdict = _verdict(untrusting, interest_income_year=2023)
 
     assert verdict.status == "doubtful"
     assert purification_ratio(verdict) is None
@@ -151,3 +153,11 @@ def test_amount_of_zero_dividend() -> None:
 def test_amount_rejects_bad_dividend(dividend: float) -> None:
     with pytest.raises(ValueError):
         purification_amount(dividend, 0.02)
+
+
+def test_trusted_older_year_gives_a_ratio_in_strict_mode() -> None:
+    verdict = _verdict(interest_income_year=2023)
+
+    assert verdict.passes
+    assert purification_ratio(verdict) == pytest.approx(0.0098)
+    assert verdict.ratios.interest_year == 2023

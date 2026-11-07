@@ -30,6 +30,7 @@ CONFIG: dict[str, Any] = {
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
         "max_interest_income_age_years": 3,
+        "trust_older_interest_income": True,
         "methodology": "aaoifi",
         "methodologies": {
             "aaoifi": {
@@ -87,6 +88,7 @@ PAGE_DATA = {
     **DATA,
     "MSFT": NAMED,
     "AAPL": UNDISCLOSED,
+    "OLDR": {**GOOD, "interest_income_year": 2023, "latest_income_statement_year": 2025},
     "IGDA.L": FUND,
     "OTHER.L": FUND,
 }
@@ -479,7 +481,14 @@ def test_checks_out() -> None:
     out = checks_out([RatioCheck("debt", None, 0.3, "market_cap", "fail")])
 
     assert [c.model_dump() for c in out] == [
-        {"name": "debt", "value": None, "limit": 0.3, "base": "market_cap", "outcome": "fail"}
+        {
+            "name": "debt",
+            "value": None,
+            "limit": 0.3,
+            "base": "market_cap",
+            "outcome": "fail",
+            "year": None,
+        }
     ]
 
 
@@ -501,6 +510,7 @@ def test_company_details(tmp_path: Path) -> None:
         "sector": "Technology",
         "industry": "Software - Infrastructure",
         "is_fund": False,
+        "business_status": "compliant",
         "approved_fund": False,
         "excluded_group": None,
         "no_data": False,
@@ -569,6 +579,7 @@ def test_every_standard_has_its_checks(tmp_path: Path) -> None:
         "limit": 0.5,
         "base": "total_assets",
         "outcome": "pass",
+        "year": None,
     }
 
 
@@ -581,6 +592,7 @@ def test_undisclosed_interest_shows_as_a_doubt(tmp_path: Path) -> None:
         "limit": 0.05,
         "base": "revenue",
         "outcome": "doubt",
+        "year": None,
     }
     assert standards[0]["warning"] == INTEREST_WARNING
 
@@ -623,3 +635,32 @@ def test_pick_standard(tmp_path: Path) -> None:
 
 def test_stock_detail_is_get_only(client: TestClient) -> None:
     assert client.post("/api/stocks/MSFT").status_code == 405
+
+
+@pytest.mark.parametrize(
+    ("ticker", "status"),
+    [("MSFT", "compliant"), ("KR", "doubtful"), ("MO", "excluded"), ("OTHER.L", "doubtful")],
+)
+def test_business_status_is_the_business_screen_alone(
+    tmp_path: Path, ticker: str, status: str
+) -> None:
+    assert _details(tmp_path, ticker)["details"]["business_status"] == status
+
+
+def test_business_status_ignores_failing_ratios(tmp_path: Path) -> None:
+    verdict = _details(tmp_path, "SPLT")
+
+    # SPLT fails FTSE on debt, but its business is fine
+    assert verdict["details"]["business_status"] == "compliant"
+
+
+def test_trusted_older_interest_income_passes_with_its_year(tmp_path: Path) -> None:
+    verdict = _details(tmp_path, "OLDR")
+
+    assert verdict["status"] == "compliant"
+    aaoifi = verdict["standards"][0]
+    assert aaoifi["warning"] is None
+    assert aaoifi["checks"][-1]["outcome"] == "pass"
+    assert aaoifi["checks"][-1]["year"] == 2023
+    assert verdict["purification_ratio"] == pytest.approx(0.02)
+    assert verdict["purification_year"] == 2023

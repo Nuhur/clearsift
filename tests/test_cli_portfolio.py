@@ -22,6 +22,7 @@ CONFIG: dict[str, Any] = {
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
         "max_interest_income_age_years": 3,
+        "trust_older_interest_income": True,
         "methodology": "aaoifi",
         "methodologies": {
             "aaoifi": {
@@ -172,11 +173,14 @@ def test_review_reason_for_ratio_fail(
     )
 
 
-def test_review_reason_for_older_interest_income_in_strict_mode(
-    config_path: Path, capsys: pytest.CaptureFixture[str]
+def test_review_reason_for_older_interest_income_in_strict_mode_when_not_trusted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["trust_older_interest_income"] = False
+    path = _write_config(tmp_path, data)
     # the first ratio reason is the debt line, which passed, so it mustn't be picked
-    _run(config_path, [_position("AAPL_US_EQ")], {"AAPL": {**GOOD, "interest_income_year": 2023}})
+    _run(path, [_position("AAPL_US_EQ")], {"AAPL": {**GOOD, "interest_income_year": 2023}})
 
     assert (
         "  AAPL (AAPL_US_EQ): FAIL, interest income isn't in the latest report, check by hand"
@@ -381,3 +385,12 @@ def test_no_money_values_printed(config_path: Path, capsys: pytest.CaptureFixtur
     assert "321.5" not in out
     assert "987.25" not in out
     assert "USD" not in out
+
+
+def test_trusted_older_interest_income_passes_in_the_portfolio(
+    config_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(config_path, [_position("AAPL_US_EQ")], {"AAPL": {**GOOD, "interest_income_year": 2023}})
+
+    out = capsys.readouterr().out
+    assert "interest income isn't in the latest report" not in out

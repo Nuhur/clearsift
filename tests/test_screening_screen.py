@@ -22,6 +22,7 @@ CONFIG = ScreeningConfig(
     max_data_age_days=120,
     market_cap_max_age_days=1,
     max_interest_income_age_years=3,
+    trust_older_interest_income=True,
     methodology=AAOIFI,
     methodologies=(AAOIFI,),
     excluded_sectors=("alcohol", "tobacco"),
@@ -108,6 +109,9 @@ def test_both_excluded_keeps_every_reason() -> None:
 
 
 STANDARD = replace(CONFIG, mode="standard")
+# the old rule, where an older year's interest income always needs a check
+UNTRUSTING_STRICT = replace(CONFIG, trust_older_interest_income=False)
+UNTRUSTING_STANDARD = replace(STANDARD, trust_older_interest_income=False)
 
 
 def test_doubtful_does_not_pass_in_strict_mode() -> None:
@@ -170,7 +174,7 @@ def test_ticker_uppercased_and_day_limits_passed_on() -> None:
     ids=["older-year", "not-disclosed"],
 )
 def test_unclear_interest_income_fails_in_strict_mode(overrides: dict[str, Any]) -> None:
-    verdict = screen_stock("TEST", CONFIG, get=FakeGet(_company(**overrides)))
+    verdict = screen_stock("TEST", UNTRUSTING_STRICT, get=FakeGet(_company(**overrides)))
 
     assert verdict.status == "doubtful"
     assert not verdict.passes
@@ -182,7 +186,7 @@ def test_unclear_interest_income_fails_in_strict_mode(overrides: dict[str, Any])
     ids=["older-year", "not-disclosed"],
 )
 def test_unclear_interest_income_passes_in_standard_mode(overrides: dict[str, Any]) -> None:
-    verdict = screen_stock("TEST", STANDARD, get=FakeGet(_company(**overrides)))
+    verdict = screen_stock("TEST", UNTRUSTING_STANDARD, get=FakeGet(_company(**overrides)))
 
     assert verdict.status == "doubtful"
     assert verdict.needs_review
@@ -293,11 +297,27 @@ def test_compare_fund_gives_same_result_under_every_standard() -> None:
 def test_strict_mode_turns_a_doubtful_ratio_into_a_fail() -> None:
     financials = _company(interest_income_year=2023)
 
-    strict = screen_stock("TEST", CONFIG, get=FakeGet(financials))
-    standard = screen_stock("TEST", STANDARD, get=FakeGet(financials))
+    strict = screen_stock("TEST", UNTRUSTING_STRICT, get=FakeGet(financials))
+    standard = screen_stock("TEST", UNTRUSTING_STANDARD, get=FakeGet(financials))
 
     # the ratio itself is only a doubt either way, it's the mode that decides the result
     for verdict in (strict, standard):
         assert verdict.ratios.ratio_checks[-1].outcome == "doubt"
     assert not strict.passes
     assert standard.passes
+
+
+@pytest.mark.parametrize("config", [CONFIG, STANDARD], ids=["strict", "standard"])
+def test_trusted_older_interest_income_is_compliant(config: ScreeningConfig) -> None:
+    verdict = screen_stock("TEST", config, get=FakeGet(_company(interest_income_year=2023)))
+
+    assert verdict.status == "compliant"
+    assert verdict.passes
+    assert not verdict.needs_review
+
+
+def test_undisclosed_interest_income_still_needs_a_check_when_trusted() -> None:
+    verdict = screen_stock("TEST", STANDARD, get=FakeGet(_company(interest_income_year=None)))
+
+    assert verdict.status == "doubtful"
+    assert verdict.needs_review

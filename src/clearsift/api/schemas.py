@@ -28,6 +28,8 @@ class RatioCheckOut(BaseModel):
     limit: float
     base: Base
     outcome: Outcome
+    # the report year, only when it's older than the latest one
+    year: int | None
 
 
 class CompanyOut(BaseModel):
@@ -36,6 +38,8 @@ class CompanyOut(BaseModel):
     sector: str | None
     industry: str | None
     is_fund: bool
+    # the business (or fund) screen on its own, before any ratios
+    business_status: Status
     # only true for a fund on your approved list that isn't also always-excluded
     approved_fund: bool
     # the config group that excluded the business, e.g. conventional_banking
@@ -164,7 +168,9 @@ def ratios_out(ratios: Sequence[RatioValue]) -> list[RatioOut]:
 def checks_out(checks: Sequence[RatioCheck]) -> list[RatioCheckOut]:
     """Turn every ratio check into its response model."""
     return [
-        RatioCheckOut(name=c.name, value=c.value, limit=c.limit, base=c.base, outcome=c.outcome)
+        RatioCheckOut(
+            name=c.name, value=c.value, limit=c.limit, base=c.base, outcome=c.outcome, year=c.year
+        )
         for c in checks
     ]
 
@@ -177,6 +183,7 @@ def company_out(verdict: StockVerdict) -> CompanyOut:
         sector=financials.sector,
         industry=financials.industry,
         is_fund=verdict.is_fund,
+        business_status=verdict.business.status,
         approved_fund=verdict.is_fund and verdict.business.status == "compliant",
         excluded_group=verdict.business.excluded_group,
         no_data=financials.has_no_data,

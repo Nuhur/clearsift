@@ -16,6 +16,7 @@ VALID: dict[str, Any] = {
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
         "max_interest_income_age_years": 3,
+        "trust_older_interest_income": True,
         "methodology": "aaoifi",
         "methodologies": {
             "aaoifi": {
@@ -376,4 +377,36 @@ def test_bad_benchmark_ticker_raises(tmp_path: Path, value: Any) -> None:
     data["benchmark"]["ticker"] = value
 
     with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_trust_older_interest_income_loads(tmp_path: Path) -> None:
+    assert load_config(_write(tmp_path, VALID)).screening.trust_older_interest_income is True
+
+
+def test_trust_older_interest_income_can_be_off(tmp_path: Path) -> None:
+    data = copy.deepcopy(VALID)
+    data["screening"]["trust_older_interest_income"] = False
+
+    assert load_config(_write(tmp_path, data)).screening.trust_older_interest_income is False
+
+
+def test_repo_config_trusts_older_interest_income() -> None:
+    assert load_config("config.yaml").screening.trust_older_interest_income is True
+
+
+@pytest.mark.parametrize("value", ["yes", "true", 1, 0, None, []])
+def test_bad_trust_older_interest_income_raises(tmp_path: Path, value: Any) -> None:
+    data = copy.deepcopy(VALID)
+    data["screening"]["trust_older_interest_income"] = value
+
+    with pytest.raises(ConfigError, match="trust_older_interest_income must be true or false"):
+        load_config(_write(tmp_path, data))
+
+
+def test_missing_trust_older_interest_income_raises(tmp_path: Path) -> None:
+    data = copy.deepcopy(VALID)
+    del data["screening"]["trust_older_interest_income"]
+
+    with pytest.raises(ConfigError, match="trust_older_interest_income"):
         load_config(_write(tmp_path, data))

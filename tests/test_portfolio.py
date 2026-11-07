@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ CONFIG: dict[str, Any] = {
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
         "max_interest_income_age_years": 3,
+        "trust_older_interest_income": True,
         "methodology": "aaoifi",
         "methodologies": {
             "aaoifi": {
@@ -231,10 +233,11 @@ def test_review_reason_ratio(config: ScreeningConfig) -> None:
     )
 
 
-def test_review_reason_older_interest_income(config: ScreeningConfig) -> None:
+def test_review_reason_older_interest_income_when_not_trusted(config: ScreeningConfig) -> None:
+    untrusting = replace(config, trust_older_interest_income=False)
     # the first ratio reason is the debt line, which passed, so it mustn't be picked
     assert (
-        _reason(config, {**GOOD, "interest_income_year": 2023})
+        _reason(untrusting, {**GOOD, "interest_income_year": 2023})
         == "interest income isn't in the latest report, check by hand"
     )
 
@@ -279,3 +282,10 @@ def test_portfolio_summary_empty() -> None:
 )
 def test_quantity_text(quantity: float | None, expected: str) -> None:
     assert quantity_text(quantity) == expected
+
+
+def test_review_reason_undisclosed_interest_income(config: ScreeningConfig) -> None:
+    assert (
+        _reason(config, {**GOOD, "interest_income_year": None})
+        == "interest income isn't in the latest report, check by hand"
+    )

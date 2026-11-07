@@ -120,11 +120,15 @@ def _interest_income(
         and all(outcome != "fail" for outcome, _ in checks)
     ):
         ratio = income / revenue
-    # an older year is the best we've got, but it might not reflect the company today
     if note:
-        checks = [("doubt" if outcome == "pass" else outcome, reason) for outcome, reason in checks]
-        if rows[-1].outcome == "pass":
-            rows[-1] = replace(rows[-1], outcome="doubt")
+        # keep the year on the row, so wherever it's shown people can see how old it is
+        rows[-1] = replace(rows[-1], year=year)
+        # an older year might not reflect the company today, so unless the config trusts
+        # it, a pass becomes a manual check. Over the limit fails either way
+        if not config.trust_older_interest_income:
+            checks = [("doubt" if o == "pass" else o, reason) for o, reason in checks]
+            if rows[-1].outcome == "pass":
+                rows[-1] = replace(rows[-1], outcome="doubt")
     return checks, ratio
 
 

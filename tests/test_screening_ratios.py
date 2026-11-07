@@ -23,12 +23,17 @@ CONFIG = ScreeningConfig(
     max_data_age_days=120,
     market_cap_max_age_days=1,
     max_interest_income_age_years=3,
+    trust_older_interest_income=True,
     methodology=AAOIFI,
     methodologies=(AAOIFI,),
     excluded_sectors=("alcohol",),
     always_exclude_tickers=(),
     approved_funds=(),
 )
+
+
+# the old rule, where an older year's interest income always needs a check
+UNTRUSTING = replace(CONFIG, trust_older_interest_income=False)
 
 
 def _company(**overrides: Any) -> CompanyFinancials:
@@ -247,10 +252,10 @@ def test_total_revenue_missing_does_not_matter() -> None:
     assert screen_ratios(_company(total_revenue=None), CONFIG).status == "compliant"
 
 
-def test_older_year_is_doubtful_with_note() -> None:
+def test_older_year_is_doubtful_with_note_when_not_trusted() -> None:
     company = _company(interest_income=4.9, interest_income_year=2023)
 
-    result = screen_ratios(company, CONFIG)
+    result = screen_ratios(company, UNTRUSTING)
 
     assert result.status == "doubtful"
     assert (
@@ -262,7 +267,7 @@ def test_older_year_is_doubtful_with_note() -> None:
 def test_older_year_on_the_age_limit_is_still_used() -> None:
     result = screen_ratios(_company(interest_income_year=2022), CONFIG)
 
-    assert result.status == "doubtful"
+    assert result.status == "compliant"
     assert any("(from 2022, newer years not reported)" in r for r in result.reasons)
 
 
@@ -550,7 +555,7 @@ UNCHANGED = [
     (
         "aaoifi",
         {"interest_income_year": 2023},
-        "doubtful",
+        "compliant",
         [
             "debt is 10.00% of market cap, AAOIFI limit is 30%",
             "cash is 20.00% of market cap, AAOIFI limit is 30%",
@@ -564,11 +569,8 @@ UNCHANGED = [
         "aaoifi",
         {"interest_income_year": 2023, "total_debt": 400.0},
         "excluded",
-        [
-            "debt is 40.00% of market cap, AAOIFI limit is 30%",
-            "interest income is 2.00% of revenue (from 2023, newer years not reported), "
-            "AAOIFI limit is 5%",
-        ],
+        # an excluded result only keeps what didn't pass, and the older figure now passes
+        ["debt is 40.00% of market cap, AAOIFI limit is 30%"],
         None,
         None,
     ),
@@ -764,8 +766,8 @@ def test_check_on_the_limit_fails() -> None:
     assert _check(result, "debt").outcome == "fail"
 
 
-def test_older_interest_income_check_is_doubt() -> None:
-    result = screen_ratios(_company(interest_income_year=2023), CONFIG)
+def test_older_interest_income_check_is_doubt_when_not_trusted() -> None:
+    result = screen_ratios(_company(interest_income_year=2023), UNTRUSTING)
 
     check = _check(result, "interest income")
     assert check.outcome == "doubt"
@@ -840,3 +842,51 @@ def test_receivables_plus_cash_without_both_fails(overrides: dict[str, Any]) -> 
     check = _check(result, "receivables plus cash")
     assert (check.value, check.outcome) == (None, "fail")
     assert result.status == "excluded"
+
+
+# trusting an older year's interest income
+
+
+def test_older_year_passes_with_note_when_trusted() -> None:
+    company = _company(interest_income=4.9, interest_income_year=2023)
+
+    result = screen_ratios(company, CONFIG)
+
+    assert result.status == "compliant"
+    assert (
+        "interest income is 0.98% of revenue (from 2023, newer years not reported), "
+        "AAOIFI limit is 5%" in result.reasons
+    )
+    # purification still goes on the older figure
+    assert result.interest_ratio == pytest.approx(0.0098)
+    assert result.interest_year == 2023
+
+
+def test_older_interest_income_check_passes_with_its_year_when_trusted() -> None:
+    result = screen_ratios(_company(interest_income_year=2023), CONFIG)
+
+    assert _check(result, "interest income") == RatioCheck(
+        "interest income", pytest.approx(0.02), 0.05, "revenue", "pass", 2023
+    )
+
+
+@pytest.mark.parametrize("config", [CONFIG, UNTRUSTING], ids=["trusted", "not-trusted"])
+def test_older_interest_income_over_the_limit_fails_either_way(config: ScreeningConfig) -> None:
+    result = screen_ratios(_company(interest_income_year=2023, interest_income=30.0), config)
+
+    assert _check(result, "interest income").outcome == "fail"
+    assert result.status == "excluded"
+
+
+@pytest.mark.parametrize("config", [CONFIG, UNTRUSTING], ids=["trusted", "not-trusted"])
+def test_undisclosed_interest_income_is_doubt_either_way(config: ScreeningConfig) -> None:
+    result = screen_ratios(_company(interest_income_year=None), config)
+
+    assert _check(result, "interest income").outcome == "doubt"
+    assert result.status == "doubtful"
+
+
+def test_latest_year_figure_has_no_year_on_its_check() -> None:
+    result = screen_ratios(_company(), CONFIG)
+
+    assert _check(result, "interest income").year is None

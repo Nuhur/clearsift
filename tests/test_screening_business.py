@@ -28,6 +28,7 @@ CONFIG = ScreeningConfig(
     max_data_age_days=120,
     market_cap_max_age_days=1,
     max_interest_income_age_years=3,
+    trust_older_interest_income=True,
     methodology=AAOIFI,
     methodologies=(AAOIFI,),
     excluded_sectors=tuple(EXCLUDED_INDUSTRIES),

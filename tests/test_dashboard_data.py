@@ -37,6 +37,7 @@ CONFIG: dict[str, Any] = {
         "max_data_age_days": 120,
         "market_cap_max_age_days": 1,
         "max_interest_income_age_years": 3,
+        "trust_older_interest_income": True,
         "methodology": "aaoifi",
         "methodologies": {
             "aaoifi": {
@@ -233,15 +234,17 @@ def test_stock_card_business_warning(standard: ScreeningConfig) -> None:
     assert card.warnings == [BUSINESS_WARNING]
 
 
-def test_stock_card_interest_warning(standard: ScreeningConfig) -> None:
-    card = _screen(standard, {**GOOD, "interest_income_year": 2023})
+def test_stock_card_interest_warning_when_not_trusted(standard: ScreeningConfig) -> None:
+    untrusting = replace(standard, trust_older_interest_income=False)
+    card = _screen(untrusting, {**GOOD, "interest_income_year": 2023})
 
     assert card.warnings == [INTEREST_WARNING]
     assert card.purification == "purify 2.00% of dividends (based on 2023)"
 
 
-def test_stock_card_both_warnings(standard: ScreeningConfig) -> None:
-    card = _screen(standard, {**GROCER, "interest_income_year": 2023})
+def test_stock_card_both_warnings_when_not_trusted(standard: ScreeningConfig) -> None:
+    untrusting = replace(standard, trust_older_interest_income=False)
+    card = _screen(untrusting, {**GROCER, "interest_income_year": 2023})
 
     assert card.warnings == [BUSINESS_WARNING, INTEREST_WARNING]
 
@@ -345,8 +348,11 @@ def test_comparison_card_business_warning_once(standard: ScreeningConfig) -> Non
     assert all(s.warning is None for s in card.standards)
 
 
-def test_comparison_card_interest_warning_per_standard(standard: ScreeningConfig) -> None:
-    card = _compare(standard, {**GOOD, "interest_income_year": 2023})
+def test_comparison_card_interest_warning_per_standard_when_not_trusted(
+    standard: ScreeningConfig,
+) -> None:
+    untrusting = replace(standard, trust_older_interest_income=False)
+    card = _compare(untrusting, {**GOOD, "interest_income_year": 2023})
 
     assert card.warnings == []
     assert [s.warning for s in card.standards] == [INTEREST_WARNING, INTEREST_WARNING]
@@ -579,3 +585,19 @@ def test_holding_values_unknown_quantity_and_currency() -> None:
         ("Average price", "321.50"),
         ("Current price", "987.25"),
     ]
+
+
+def test_stock_card_trusted_older_year_has_no_warning(standard: ScreeningConfig) -> None:
+    card = _screen(standard, {**GOOD, "interest_income_year": 2023})
+
+    assert card.result == "PASS (compliant)"
+    assert card.colour == "green"
+    assert card.warnings == []
+    assert card.purification == "purify 2.00% of dividends (based on 2023)"
+
+
+def test_comparison_card_trusted_older_year_has_no_warning(standard: ScreeningConfig) -> None:
+    card = _compare(standard, {**GOOD, "interest_income_year": 2023})
+
+    assert [s.warning for s in card.standards] == [None, None]
+    assert [s.colour for s in card.standards] == ["green", "green"]

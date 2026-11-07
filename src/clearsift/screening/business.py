@@ -29,6 +29,8 @@ class RatioCheck:
     limit: float
     base: Base
     outcome: Outcome
+    # set when the figure comes from an older report than the latest one
+    year: int | None = None
 
 
 @dataclass(frozen=True)

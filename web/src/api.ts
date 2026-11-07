@@ -20,6 +20,8 @@ export interface RatioCheckOut {
   limit: number
   base: Base
   outcome: Outcome
+  // the report year, only when it's older than the latest one
+  year: number | null
 }
 
 export interface CompanyOut {
@@ -28,6 +30,8 @@ export interface CompanyOut {
   sector: string | null
   industry: string | null
   is_fund: boolean
+  // the business (or fund) screen on its own, before any ratios
+  business_status: Status
   approved_fund: boolean
   // the config group that excluded the business, e.g. conventional_banking
   excluded_group: string | null

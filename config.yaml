@@ -15,6 +15,9 @@ screening:
   # Some companies stop reporting interest income. Use the newest year that has it,
   # as long as it's no more than this many years before the latest report.
   max_interest_income_age_years: 3
+  # true: an older year's interest income under the limit passes, and the page says which
+  # year it's from. false: it still counts, but needs checking by hand.
+  trust_older_interest_income: true
 
   # Which standard to screen with. Must be one of the names under methodologies.
   # `clearsift screen --compare` runs all of them.
