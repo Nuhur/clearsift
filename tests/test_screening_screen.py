@@ -288,3 +288,16 @@ def test_compare_fund_gives_same_result_under_every_standard() -> None:
     verdicts = compare_stock("IGDA.L", config, get=FakeGet(_etf()))
 
     assert [v.status for v in verdicts] == ["compliant", "compliant"]
+
+
+def test_strict_mode_turns_a_doubtful_ratio_into_a_fail() -> None:
+    financials = _company(interest_income_year=2023)
+
+    strict = screen_stock("TEST", CONFIG, get=FakeGet(financials))
+    standard = screen_stock("TEST", STANDARD, get=FakeGet(financials))
+
+    # the ratio itself is only a doubt either way, it's the mode that decides the result
+    for verdict in (strict, standard):
+        assert verdict.ratios.ratio_checks[-1].outcome == "doubt"
+    assert not strict.passes
+    assert standard.passes

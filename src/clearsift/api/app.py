@@ -61,6 +61,18 @@ def clean_ticker(text: str) -> str | None:
     return ticker if _TICKER.fullmatch(ticker) else None
 
 
+def pick_standard(config: ScreeningConfig, standard: str | None) -> str:
+    """Return the label of the asked-for standard, or the config's own if none was asked for."""
+    if standard is None:
+        return config.methodology.label
+    by_name = {m.name.lower(): m for m in config.methodologies}
+    method = by_name.get(standard.strip().lower())
+    if method is None:
+        # the names come from config.yaml, so listing them gives nothing away
+        raise HTTPException(422, f"standard must be one of: {', '.join(by_name)}")
+    return method.label
+
+
 def create_app(
     config_path: str | Path = "config.yaml",
     get: Callable[..., CompanyFinancials] = get_financials,
@@ -120,16 +132,17 @@ def create_app(
         return ScreenOut(results=results)
 
     @app.get("/api/stocks/{ticker}")
-    def stock(ticker: str, refresh: bool = False) -> StockDetailOut:
+    def stock(ticker: str, refresh: bool = False, standard: str | None = None) -> StockDetailOut:
         cleaned = clean_ticker(ticker)
         if cleaned is None:
             raise HTTPException(400, "that doesn't look like a ticker")
         config = load()
+        chosen = pick_standard(config, standard)
         try:
             verdicts = compare_stock(cleaned, config, get=getter(refresh))
         except ValueError as exc:
             raise HTTPException(500, str(exc)) from exc
-        verdict: ComparisonOut = comparison_out(verdicts, config.methodology.label)
+        verdict: ComparisonOut = comparison_out(verdicts, chosen)
         try:
             prices = get_prices(cleaned, refresh=refresh)
         except Exception:

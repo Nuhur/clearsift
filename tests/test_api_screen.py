@@ -8,18 +8,19 @@ import yaml
 from fastapi.testclient import TestClient
 
 from clearsift.api import create_app
-from clearsift.api.app import GENERIC_ERROR, clean_ticker
+from clearsift.api.app import GENERIC_ERROR, clean_ticker, pick_standard
 from clearsift.api.schemas import (
+    checks_out,
     comparison_out,
     prices_out,
     ratios_out,
     verdict_out,
 )
-from clearsift.cli import BUSINESS_WARNING
+from clearsift.cli import BUSINESS_WARNING, INTEREST_WARNING
 from clearsift.config import load_config
 from clearsift.data.models import CompanyFinancials
 from clearsift.data.prices import PricePoint
-from clearsift.screening.business import RatioValue
+from clearsift.screening.business import RatioCheck, RatioValue
 from clearsift.screening.screen import compare_stock, screen_stock
 
 CONFIG: dict[str, Any] = {
@@ -76,6 +77,29 @@ TOBACCO = {**GOOD, "sector": "Consumer Defensive", "industry": "Tobacco"}
 SPLIT = {**GOOD, "market_cap": 10_000.0, "balance_sheet_debt": 1000.0}
 
 DATA = {"MSFT": GOOD, "KR": GROCER, "MO": TOBACCO, "SPLT": SPLIT}
+
+# extra fake companies for the stock page, kept apart so the older tests don't change
+NAMED = {**GOOD, "company_name": "Microsoft Corporation"}
+# stopped reporting interest income, like Apple
+UNDISCLOSED = {**GOOD, "interest_income": None, "interest_income_year": None}
+FUND = {"quote_type": "ETF", "company_name": "iShares MSCI World Islamic"}
+PAGE_DATA = {
+    **DATA,
+    "MSFT": NAMED,
+    "AAPL": UNDISCLOSED,
+    "IGDA.L": FUND,
+    "OTHER.L": FUND,
+}
+# the real config's three standards, with one approved fund
+FULL_CONFIG = copy.deepcopy(CONFIG)
+FULL_CONFIG["screening"]["approved_funds"] = ["IGDA.L"]
+FULL_CONFIG["screening"]["methodologies"]["msci"] = {
+    "denominator": "total_assets",
+    "max_debt": 0.3333,
+    "max_cash": 0.3333,
+    "max_receivables_and_cash": 0.3333,
+    "max_impermissible_income": 0.05,
+}
 PRICES = [PricePoint(date(2026, 5, 28), 101.5), PricePoint(date(2026, 5, 29), 102.25)]
 
 
@@ -446,3 +470,156 @@ def test_stock_detail_value_error(tmp_path: Path) -> None:
 
     assert response.status_code == 500
     assert response.json() == {"message": "bad mapping"}
+
+
+# stock page details
+
+
+def test_checks_out() -> None:
+    out = checks_out([RatioCheck("debt", None, 0.3, "market_cap", "fail")])
+
+    assert [c.model_dump() for c in out] == [
+        {"name": "debt", "value": None, "limit": 0.3, "base": "market_cap", "outcome": "fail"}
+    ]
+
+
+def _page_client(tmp_path: Path) -> TestClient:
+    return _client(tmp_path, get=FakeGet(PAGE_DATA), config=FULL_CONFIG)
+
+
+def _details(tmp_path: Path, ticker: str) -> dict[str, Any]:
+    response = _page_client(tmp_path).get(f"/api/stocks/{ticker}")
+    assert response.status_code == 200
+    return response.json()["verdict"]
+
+
+def test_company_details(tmp_path: Path) -> None:
+    verdict = _details(tmp_path, "MSFT")
+
+    assert verdict["details"] == {
+        "name": "Microsoft Corporation",
+        "sector": "Technology",
+        "industry": "Software - Infrastructure",
+        "is_fund": False,
+        "approved_fund": False,
+        "excluded_group": None,
+        "no_data": False,
+    }
+
+
+def test_name_falls_back_to_the_ticker(tmp_path: Path) -> None:
+    assert _details(tmp_path, "KR")["details"]["name"] == "KR"
+
+
+def test_missing_labels_are_null_not_unknown(tmp_path: Path) -> None:
+    details = _details(tmp_path, "NODATA")["details"]
+
+    assert (details["sector"], details["industry"]) == (None, None)
+    assert details["no_data"] is True
+
+
+def test_excluded_group_in_details(tmp_path: Path) -> None:
+    verdict = _details(tmp_path, "MO")
+
+    assert verdict["details"]["excluded_group"] == "tobacco"
+    assert verdict["passes"] is False
+
+
+@pytest.mark.parametrize(
+    ("ticker", "approved", "passes"),
+    [("IGDA.L", True, True), ("OTHER.L", False, True)],
+)
+def test_fund_details(tmp_path: Path, ticker: str, approved: bool, passes: bool) -> None:
+    verdict = _details(tmp_path, ticker)
+
+    assert verdict["details"]["is_fund"] is True
+    assert verdict["details"]["approved_fund"] is approved
+    assert verdict["passes"] is passes
+    # funds purify their own income, so there's no number to give
+    assert verdict["purification_ratio"] is None
+    assert all(s["checks"] == [] for s in verdict["standards"])
+
+
+def test_purification_fields(tmp_path: Path) -> None:
+    verdict = _details(tmp_path, "MSFT")
+
+    assert verdict["purification_ratio"] == pytest.approx(0.02)
+    assert verdict["purification_year"] == 2025
+
+
+def test_purification_follows_the_chosen_standard(tmp_path: Path) -> None:
+    client = _page_client(tmp_path)
+
+    passing = client.get("/api/stocks/SPLT", params={"standard": "aaoifi"}).json()["verdict"]
+    failing = client.get("/api/stocks/SPLT", params={"standard": "ftse"}).json()["verdict"]
+
+    assert passing["purification_ratio"] == pytest.approx(0.02)
+    assert failing["passes"] is False
+    assert failing["purification_ratio"] is None
+    assert failing["purification_year"] is None
+
+
+def test_every_standard_has_its_checks(tmp_path: Path) -> None:
+    standards = _details(tmp_path, "MSFT")["standards"]
+
+    assert [len(s["checks"]) for s in standards] == [3, 4, 4]
+    assert standards[1]["checks"][2] == {
+        "name": "receivables plus cash",
+        "value": pytest.approx(0.15),
+        "limit": 0.5,
+        "base": "total_assets",
+        "outcome": "pass",
+    }
+
+
+def test_undisclosed_interest_shows_as_a_doubt(tmp_path: Path) -> None:
+    standards = _details(tmp_path, "AAPL")["standards"]
+
+    assert standards[0]["checks"][-1] == {
+        "name": "interest income",
+        "value": None,
+        "limit": 0.05,
+        "base": "revenue",
+        "outcome": "doubt",
+    }
+    assert standards[0]["warning"] == INTEREST_WARNING
+
+
+@pytest.mark.parametrize(("standard", "label"), [("ftse", "FTSE"), (" FTSE ", "FTSE")])
+def test_stock_detail_picks_a_standard(tmp_path: Path, standard: str, label: str) -> None:
+    client = _client(tmp_path)
+
+    verdict = client.get("/api/stocks/SPLT", params={"standard": standard}).json()["verdict"]
+
+    assert verdict["methodology"] == label
+    assert verdict["passes"] is False
+    # the other standards still come back, so the page can mention them
+    assert [s["methodology"] for s in verdict["standards"]] == ["AAOIFI", "FTSE"]
+
+
+def test_stock_detail_defaults_to_the_config_standard(tmp_path: Path) -> None:
+    verdict = _client(tmp_path).get("/api/stocks/SPLT").json()["verdict"]
+
+    assert verdict["methodology"] == "AAOIFI"
+
+
+def test_stock_detail_unknown_standard(tmp_path: Path) -> None:
+    get = FakeGet(DATA)
+    client = _client(tmp_path, get=get)
+
+    response = client.get("/api/stocks/MSFT", params={"standard": "<b>nope</b>"})
+
+    assert response.status_code == 422
+    assert response.json() == {"message": "standard must be one of: aaoifi, ftse"}
+    assert get.calls == []
+
+
+def test_pick_standard(tmp_path: Path) -> None:
+    config = load_config(_write(tmp_path, FULL_CONFIG)).screening
+
+    assert pick_standard(config, None) == "AAOIFI"
+    assert pick_standard(config, "msci") == "MSCI"
+
+
+def test_stock_detail_is_get_only(client: TestClient) -> None:
+    assert client.post("/api/stocks/MSFT").status_code == 405

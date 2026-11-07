@@ -12,6 +12,7 @@ from clearsift.data.models import CompanyFinancials
 DEFAULT_DB_PATH = Path("data/cache.db")
 
 _FIELDS = (
+    "company_name",
     "sector",
     "industry",
     "quote_type",
@@ -30,11 +31,12 @@ _FIELDS = (
 )
 
 # bump this whenever the table changes, so old cache files get cleared out
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS financials (
     ticker TEXT PRIMARY KEY,
+    company_name TEXT,
     sector TEXT,
     industry TEXT,
     quote_type TEXT,
@@ -142,8 +144,8 @@ def get_financials(
             return cached
 
     fresh = fetch(ticker)
-    # all None usually means yfinance fell over, so don't cache it or we'd be stuck with it
-    if any(getattr(fresh, name) is not None for name in _FIELDS):
+    # no data usually means yfinance fell over, so don't cache it or we'd be stuck with it
+    if not fresh.has_no_data:
         save_financials(fresh, db_path)
     return fresh
 

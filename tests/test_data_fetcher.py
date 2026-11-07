@@ -424,3 +424,22 @@ def test_debt_parts_from_older_year_are_not_mixed_in() -> None:
 )
 def test_clean_number(raw: object, expected: float | None) -> None:
     assert clean_number(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("info", "expected"),
+    [
+        ({"longName": "Apple Inc.", "shortName": "Apple"}, "Apple Inc."),
+        ({"shortName": "Apple"}, "Apple"),
+        ({"longName": "  ", "shortName": "Apple"}, "Apple"),
+        ({"longName": "Apple   Inc.\n"}, "Apple Inc."),
+        ({"longName": 42}, None),
+        ({}, None),
+    ],
+    ids=["long", "short-fallback", "blank-long", "tidied", "not-text", "missing"],
+)
+def test_company_name(info: dict, expected: str | None) -> None:
+    with patch("clearsift.data.fetcher.yf.Ticker", return_value=_mock_ticker(info)):
+        cf = fetch_financials("AAPL")
+
+    assert cf.company_name == expected

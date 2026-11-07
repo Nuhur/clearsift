@@ -2,12 +2,37 @@
 
 export type Status = 'compliant' | 'doubtful' | 'excluded'
 export type Colour = 'green' | 'amber' | 'red'
+export type Outcome = 'pass' | 'doubt' | 'fail'
+// what a ratio is divided by
+export type Base = 'market_cap' | 'total_assets' | 'revenue'
 
 export interface RatioOut {
   name: string
   value: number
   limit: number
   passed: boolean
+}
+
+export interface RatioCheckOut {
+  name: string
+  // null when the figure was missing, so there's nothing to draw
+  value: number | null
+  limit: number
+  base: Base
+  outcome: Outcome
+}
+
+export interface CompanyOut {
+  // falls back to the ticker when yfinance has no name
+  name: string
+  sector: string | null
+  industry: string | null
+  is_fund: boolean
+  approved_fund: boolean
+  // the config group that excluded the business, e.g. conventional_banking
+  excluded_group: string | null
+  // yfinance gave nothing at all
+  no_data: boolean
 }
 
 export interface VerdictOut {
@@ -19,10 +44,14 @@ export interface VerdictOut {
   result: string
   colour: Colour
   company: string[]
+  details: CompanyOut
   warnings: string[]
   purification: string | null
+  purification_ratio: number | null
+  purification_year: number | null
   reasons: string[]
   ratios: RatioOut[]
+  checks: RatioCheckOut[]
 }
 
 export interface StandardOut {
@@ -34,6 +63,7 @@ export interface StandardOut {
   warning: string | null
   reasons: string[]
   ratios: RatioOut[]
+  checks: RatioCheckOut[]
 }
 
 export interface ComparisonOut {
@@ -46,8 +76,12 @@ export interface ComparisonOut {
   result: string
   colour: Colour
   company: string[]
+  details: CompanyOut
   warnings: string[]
   purification: string | null
+  // these follow the chosen standard, so a fail there means nothing to purify
+  purification_ratio: number | null
+  purification_year: number | null
   business_reasons: string[]
   standards: StandardOut[]
   summary: string
@@ -155,13 +189,23 @@ export function getScreen(
   )
 }
 
+export interface StockOptions {
+  refresh?: boolean
+  // aaoifi, ftse or msci. Left out, the API uses the one in config.yaml
+  standard?: string
+}
+
 /** Get one stock's verdict under every standard, plus a year of closing prices. */
 export function getStock(
   ticker: string,
-  options: { refresh?: boolean } = {},
+  options: StockOptions = {},
   signal?: AbortSignal,
 ): Promise<StockDetailOut> {
-  return get(`/api/stocks/${encodeURIComponent(ticker)}`, { refresh: options.refresh }, signal)
+  return get(
+    `/api/stocks/${encodeURIComponent(ticker)}`,
+    { refresh: options.refresh, standard: options.standard },
+    signal,
+  )
 }
 
 /** Screen the open Trading 212 positions. */

@@ -5,7 +5,7 @@ import pytest
 
 from clearsift.config import Methodology, ScreeningConfig
 from clearsift.data.models import CompanyFinancials
-from clearsift.screening.business import RatioValue
+from clearsift.screening.business import RatioCheck, RatioValue, ScreenResult
 from clearsift.screening.ratios import screen_ratios
 
 AAOIFI = Methodology(
@@ -732,3 +732,111 @@ def test_undisclosed_interest_income_has_no_ratio_value() -> None:
     result = screen_ratios(_company(interest_income_year=None), CONFIG)
 
     assert [v.name for v in result.ratio_values] == ["debt", "cash"]
+
+
+# outcome for each ratio
+
+
+def _check(result: ScreenResult, name: str) -> RatioCheck:
+    return next(c for c in result.ratio_checks if c.name == name)
+
+
+def test_checks_under_the_limit_pass() -> None:
+    result = screen_ratios(_company(), CONFIG)
+
+    assert result.ratio_checks == (
+        RatioCheck("debt", pytest.approx(0.10), 0.30, "market_cap", "pass"),
+        RatioCheck("cash", pytest.approx(0.20), 0.30, "market_cap", "pass"),
+        RatioCheck("interest income", pytest.approx(0.02), 0.05, "revenue", "pass"),
+    )
+
+
+def test_check_over_the_limit_fails() -> None:
+    result = screen_ratios(_company(total_debt=400.0), CONFIG)
+
+    assert _check(result, "debt").outcome == "fail"
+    assert _check(result, "debt").value == pytest.approx(0.40)
+
+
+def test_check_on_the_limit_fails() -> None:
+    result = screen_ratios(_company(total_debt=300.0), CONFIG)
+
+    assert _check(result, "debt").outcome == "fail"
+
+
+def test_older_interest_income_check_is_doubt() -> None:
+    result = screen_ratios(_company(interest_income_year=2023), CONFIG)
+
+    check = _check(result, "interest income")
+    assert check.outcome == "doubt"
+    assert check.value == pytest.approx(0.02)
+
+
+def test_older_interest_income_over_the_limit_still_fails() -> None:
+    result = screen_ratios(_company(interest_income_year=2023, interest_income=30.0), CONFIG)
+
+    assert _check(result, "interest income").outcome == "fail"
+
+
+@pytest.mark.parametrize("year", [None, 2020], ids=["not-reported", "too-old"])
+def test_undisclosed_interest_income_check_is_doubt(year: int | None) -> None:
+    result = screen_ratios(_company(interest_income_year=year), CONFIG)
+
+    assert _check(result, "interest income") == RatioCheck(
+        "interest income", None, 0.05, "revenue", "doubt"
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "name"),
+    [
+        ({"total_debt": None}, "debt"),
+        ({"total_debt": -1.0}, "debt"),
+        ({"cash_and_short_term_investments": float("nan")}, "cash"),
+        ({"latest_income_statement_year": None}, "interest income"),
+        ({"interest_income": None}, "interest income"),
+        ({"interest_income_revenue": None}, "interest income"),
+    ],
+    ids=["missing", "negative", "nan", "no-income-statement", "no-interest", "no-revenue"],
+)
+def test_other_missing_figures_fail(overrides: dict[str, Any], name: str) -> None:
+    result = screen_ratios(_company(**overrides), CONFIG)
+
+    check = _check(result, name)
+    assert check.value is None
+    assert check.outcome == "fail"
+    assert result.status == "excluded"
+
+
+def test_missing_base_fails_every_ratio_on_it() -> None:
+    result = screen_ratios(_company(market_cap=None), CONFIG)
+
+    assert [(c.name, c.value, c.outcome) for c in result.ratio_checks] == [
+        ("debt", None, "fail"),
+        ("cash", None, "fail"),
+        ("interest income", pytest.approx(0.02), "pass"),
+    ]
+
+
+def test_checks_list_every_ratio_for_ftse() -> None:
+    result = screen_ratios(_company(), _using(FTSE))
+
+    assert [(c.name, c.base, c.limit) for c in result.ratio_checks] == [
+        ("debt", "total_assets", 0.33333),
+        ("cash", "total_assets", 0.33333),
+        ("receivables plus cash", "total_assets", 0.50),
+        ("interest income", "revenue", 0.05),
+    ]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"accounts_receivable": None}, {"balance_sheet_cash": None}],
+    ids=["no-receivables", "no-cash"],
+)
+def test_receivables_plus_cash_without_both_fails(overrides: dict[str, Any]) -> None:
+    result = screen_ratios(_company(**overrides), _using(FTSE))
+
+    check = _check(result, "receivables plus cash")
+    assert (check.value, check.outcome) == (None, "fail")
+    assert result.status == "excluded"

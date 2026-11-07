@@ -52,3 +52,21 @@ def test_all_fields_set() -> None:
     assert cf.sector == "Technology"
     assert cf.market_cap == 3e12
     assert cf.fetched_at == ts
+
+
+def test_company_name_defaults_none() -> None:
+    assert CompanyFinancials(ticker="AAPL").company_name is None
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({}, True),
+        ({"company_name": "Apple Inc."}, True),
+        ({"quote_type": "EQUITY"}, False),
+        ({"market_cap": 0.0}, False),
+    ],
+    ids=["empty", "name-only", "quote-type", "zero-is-still-data"],
+)
+def test_has_no_data(values: dict, expected: bool) -> None:
+    assert CompanyFinancials(ticker="AAPL", **values).has_no_data is expected

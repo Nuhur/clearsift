@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Callable
-from dataclasses import fields
 from decimal import ROUND_CEILING, Decimal
 from functools import partial
 
@@ -270,7 +269,7 @@ def company_lines(verdict: StockVerdict) -> list[str]:
         return [f"fund ({financials.quote_type})"]
     lines = [f"{financials.sector or 'unknown'} / {financials.industry or 'unknown'}"]
     # an empty fetch usually means yfinance fell over, not that the company is bad
-    if _has_no_data(financials):
+    if financials.has_no_data:
         lines.append("no data from yfinance, try again later")
     return lines
 
@@ -278,10 +277,3 @@ def company_lines(verdict: StockVerdict) -> list[str]:
 def _indent(lines: list[str]) -> list[str]:
     return ["  " + line for line in lines]
 
-
-def _has_no_data(financials: CompanyFinancials) -> bool:
-    return all(
-        getattr(financials, f.name) is None
-        for f in fields(financials)
-        if f.name not in ("ticker", "fetched_at")
-    )

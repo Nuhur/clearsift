@@ -46,6 +46,7 @@ def fetch_financials(ticker: str) -> CompanyFinancials:
     # sector and industry are text, so the line above wrongly set them to None
     kwargs["sector"] = info.get("sector") or None
     kwargs["industry"] = info.get("industry") or None
+    kwargs["company_name"] = _company_name(info)
     quote_type = info.get("quoteType")
     kwargs["quote_type"] = (
         quote_type.strip().upper() if isinstance(quote_type, str) and quote_type.strip() else None
@@ -65,6 +66,15 @@ def clean_number(raw: Any) -> float | None:
         return None
     value = float(raw)
     return value if math.isfinite(value) else None
+
+
+def _company_name(info: dict) -> str | None:
+    # longName is the full one, e.g. "Apple Inc.", shortName is the fallback
+    for key in ("longName", "shortName"):
+        value = info.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())
+    return None
 
 
 def _interest_income(yf_ticker: Any) -> dict[str, Any]:

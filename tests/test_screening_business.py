@@ -194,3 +194,23 @@ def test_known_industries_match_installed_yfinance() -> None:
     actual = {sector: set(labels) for sector, labels in KNOWN_INDUSTRIES_BY_SECTOR.items()}
 
     assert actual == expected
+
+
+def test_excluded_group_is_recorded() -> None:
+    result = screen_business(_company("Financial Services", "Banks - Diversified"), CONFIG)
+
+    assert result.excluded_group == "conventional_banking"
+
+
+@pytest.mark.parametrize(
+    "company",
+    [
+        _company(),
+        _company("Consumer Defensive", "Grocery Stores"),
+        _company(ticker="BAD"),
+        _company(sector=None),
+    ],
+    ids=["compliant", "doubtful", "always-excluded", "missing"],
+)
+def test_no_excluded_group_unless_a_group_excluded_it(company: CompanyFinancials) -> None:
+    assert screen_business(company, CONFIG).excluded_group is None

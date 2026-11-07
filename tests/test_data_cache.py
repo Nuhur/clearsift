@@ -410,3 +410,21 @@ def test_save_then_load_keeps_balance_sheet_debt_and_cash(db_path: Path) -> None
     assert loaded is not None
     assert loaded.balance_sheet_debt == 1.2e11
     assert loaded.balance_sheet_cash is None
+
+
+def test_save_then_load_keeps_company_name(db_path: Path) -> None:
+    save_financials(_financials(company_name="Microsoft Corporation"), db_path)
+
+    loaded = _load(db_path)
+    assert loaded is not None
+    assert loaded.company_name == "Microsoft Corporation"
+
+
+def test_get_does_not_cache_a_name_on_its_own(db_path: Path) -> None:
+    fetch = FakeFetch(CompanyFinancials(ticker="MSFT", company_name="Microsoft Corporation"))
+
+    _get(db_path, fetch)
+    _get(db_path, fetch)
+
+    # a name with nothing else means yfinance fell over, so try again next time
+    assert fetch.calls == ["MSFT", "MSFT"]

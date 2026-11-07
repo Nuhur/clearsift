@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 
 # yfinance quoteType values that mean a fund rather than a company
@@ -10,6 +10,8 @@ FUND_QUOTE_TYPES: frozenset[str] = frozenset({"ETF", "MUTUALFUND"})
 @dataclass
 class CompanyFinancials:
     ticker: str
+    # only for showing, nothing is screened on it
+    company_name: str | None = None
     sector: str | None = None
     industry: str | None = None
     # e.g. EQUITY or ETF, uppercase
@@ -34,3 +36,13 @@ class CompanyFinancials:
     def is_fund(self) -> bool:
         """Whether yfinance says this is an ETF or mutual fund rather than a company."""
         return self.quote_type in FUND_QUOTE_TYPES
+
+    @property
+    def has_no_data(self) -> bool:
+        """Whether yfinance gave nothing at all to screen on."""
+        # the name alone can't be screened, so a name with nothing else is still no data
+        return all(
+            getattr(self, f.name) is None
+            for f in fields(self)
+            if f.name not in ("ticker", "company_name", "fetched_at")
+        )

@@ -7,6 +7,10 @@ from clearsift.config import ScreeningConfig
 from clearsift.data.models import CompanyFinancials
 
 Status = Literal["compliant", "doubtful", "excluded"]
+# what each single check found: fine, needs a manual look, or a hard fail
+Outcome = Literal["pass", "doubt", "fail"]
+# what a ratio is divided by
+Base = Literal["market_cap", "total_assets", "revenue"]
 
 
 @dataclass(frozen=True)
@@ -18,6 +22,16 @@ class RatioValue:
 
 
 @dataclass(frozen=True)
+class RatioCheck:
+    name: str
+    # None when a figure was missing or bad, so the ratio couldn't be worked out
+    value: float | None
+    limit: float
+    base: Base
+    outcome: Outcome
+
+
+@dataclass(frozen=True)
 class ScreenResult:
     status: Status
     reasons: list[str]
@@ -26,6 +40,10 @@ class ScreenResult:
     interest_year: int | None = None
     # every ratio that could be worked out, so the dashboard can chart them
     ratio_values: tuple[RatioValue, ...] = ()
+    # every ratio the standard checks, missing ones too, so nothing quietly drops off the page
+    ratio_checks: tuple[RatioCheck, ...] = ()
+    # the config group that excluded the business, e.g. conventional_banking
+    excluded_group: str | None = None
 
 
 # Which Yahoo industries each excluded group in config.yaml covers.
@@ -321,7 +339,9 @@ def screen_business(financials: CompanyFinancials, config: ScreeningConfig) -> S
     for name in config.excluded_sectors:
         if industry in EXCLUDED_INDUSTRIES[name]:
             return ScreenResult(
-                "excluded", [f"industry '{industry}' falls under excluded group '{name}'"]
+                "excluded",
+                [f"industry '{industry}' falls under excluded group '{name}'"],
+                excluded_group=name,
             )
 
     if industry in NEEDS_REVIEW_INDUSTRIES:

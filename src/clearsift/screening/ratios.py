@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import math
-from typing import Literal
+from dataclasses import replace
 
 from clearsift.config import Denominator, Methodology, ScreeningConfig
 from clearsift.data.models import CompanyFinancials
-from clearsift.screening.business import RatioValue, ScreenResult, Status
+from clearsift.screening.business import (
+    Base,
+    Outcome,
+    RatioCheck,
+    RatioValue,
+    ScreenResult,
+    Status,
+)
 
-# what each single check found: fine, needs a manual look, or a hard fail
-Outcome = Literal["pass", "doubt", "fail"]
 Check = tuple[Outcome, str]
 
 _DENOMINATOR_NAMES: dict[Denominator, str] = {
@@ -22,6 +27,7 @@ def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> Scr
     method = config.methodology
     checks: list[Check] = []
     values: list[RatioValue] = []
+    rows: list[RatioCheck] = []
 
     base_name = _DENOMINATOR_NAMES[method.denominator]
     # fail closed: a missing or non-positive base means none of its ratios can be trusted
@@ -32,26 +38,25 @@ def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> Scr
         debt, cash = financials.balance_sheet_debt, financials.balance_sheet_cash
     else:
         debt, cash = financials.total_debt, financials.cash_and_short_term_investments
-    checks += _ratio("debt", debt, base, base_name, method.max_debt, method, values)
-    checks += _ratio("cash", cash, base, base_name, method.max_cash, method, values)
+    found = _Found(method.denominator, values, rows)
+    checks += _ratio("debt", debt, base, base_name, method.max_debt, method, found)
+    checks += _ratio("cash", cash, base, base_name, method.max_cash, method, found)
 
     if method.max_receivables_and_cash is not None:
+        limit = method.max_receivables_and_cash
         receivables = financials.accounts_receivable
         if receivables is None:
             checks.append(("fail", "accounts receivable is missing"))
+            found.missing("receivables plus cash", limit)
         # the cash check has already said if cash is missing, so only add this if both are there
         elif cash is not None:
             checks += _ratio(
-                "receivables plus cash",
-                receivables + cash,
-                base,
-                base_name,
-                method.max_receivables_and_cash,
-                method,
-                values,
+                "receivables plus cash", receivables + cash, base, base_name, limit, method, found
             )
+        else:
+            found.missing("receivables plus cash", limit)
 
-    interest_checks, interest_ratio = _interest_income(financials, config, values)
+    interest_checks, interest_ratio = _interest_income(financials, config, values, rows)
     checks += interest_checks
     interest_year = financials.interest_income_year if interest_ratio is not None else None
 
@@ -61,6 +66,7 @@ def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> Scr
             "excluded",
             [reason for outcome, reason in checks if outcome != "pass"],
             ratio_values=tuple(values),
+            ratio_checks=tuple(rows),
         )
     status: Status = "doubtful" if "doubt" in outcomes else "compliant"
     return ScreenResult(
@@ -69,20 +75,28 @@ def screen_ratios(financials: CompanyFinancials, config: ScreeningConfig) -> Scr
         interest_ratio,
         interest_year,
         tuple(values),
+        tuple(rows),
     )
 
 
 def _interest_income(
-    financials: CompanyFinancials, config: ScreeningConfig, values: list[RatioValue]
+    financials: CompanyFinancials,
+    config: ScreeningConfig,
+    values: list[RatioValue],
+    rows: list[RatioCheck],
 ) -> tuple[list[Check], float | None]:
     latest = financials.latest_income_statement_year
     year = financials.interest_income_year
+    limit = config.methodology.max_impermissible_income
+    found = _Found("revenue", values, rows)
     # no income statement at all means yfinance gave us nothing, which is missing data
     if latest is None:
+        found.missing("interest income", limit)
         return [("fail", "interest income is missing")], None
     # the company has reports but stopped showing interest income in them. That's not
     # the same as no data, so it's a manual check rather than a hard fail (like Zoya)
     if year is None or latest - year > config.max_interest_income_age_years:
+        found.missing("interest income", limit, "doubt")
         return [("doubt", "interest income not disclosed in recent reports, check by hand")], None
 
     checks: list[Check] = []
@@ -93,9 +107,9 @@ def _interest_income(
         financials.interest_income,
         revenue,
         "revenue" + note,
-        config.methodology.max_impermissible_income,
+        limit,
         config.methodology,
-        values,
+        found,
     )
     # a missing or negative number fails above, so only keep the ratio if nothing did
     income = financials.interest_income
@@ -109,7 +123,26 @@ def _interest_income(
     # an older year is the best we've got, but it might not reflect the company today
     if note:
         checks = [("doubt" if outcome == "pass" else outcome, reason) for outcome, reason in checks]
+        if rows[-1].outcome == "pass":
+            rows[-1] = replace(rows[-1], outcome="doubt")
     return checks, ratio
+
+
+class _Found:
+    """Collects the ratios worked out against one base, for the chart and the page."""
+
+    def __init__(self, base: Base, values: list[RatioValue], rows: list[RatioCheck]) -> None:
+        self.base = base
+        self.values = values
+        self.rows = rows
+
+    def worked_out(self, name: str, ratio: float, limit: float, passed: bool) -> None:
+        self.values.append(RatioValue(name, ratio, limit, passed))
+        self.rows.append(RatioCheck(name, ratio, limit, self.base, "pass" if passed else "fail"))
+
+    def missing(self, name: str, limit: float, outcome: Outcome = "fail") -> None:
+        # fail closed: no figure means it didn't get through, unless the rules say check by hand
+        self.rows.append(RatioCheck(name, None, limit, self.base, outcome))
 
 
 def _ratio(
@@ -119,20 +152,23 @@ def _ratio(
     base_name: str,
     limit: float,
     method: Methodology,
-    values: list[RatioValue],
+    found: _Found,
 ) -> list[Check]:
     if value is None or not math.isfinite(value):
+        found.missing(name, limit)
         return [("fail", f"{name} is missing")]
     # a negative amount would slip under any limit, so it can't be trusted
     if value < 0:
+        found.missing(name, limit)
         return [("fail", f"{name} is negative")]
     # the base already failed, and that reason is in the list
     if base is None:
+        found.missing(name, limit)
         return []
 
     ratio = value / base
     passed = _within_limit(ratio, limit)
-    values.append(RatioValue(name, ratio, limit, passed))
+    found.worked_out(name, ratio, limit, passed)
     shown = _actual_percent(ratio, limit, passed)
     reason = f"{name} is {shown} of {base_name}, {method.label} limit is {_limit_percent(limit)}"
     return [("pass" if passed else "fail", reason)]
