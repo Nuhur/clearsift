@@ -26,12 +26,16 @@ export function groupWords(group: string): string {
 /** Build the big sentence at the top of the stock page. */
 export function headline(ticker: string, verdict: ComparisonOut, standard: StandardOut): string {
   const { details } = verdict
-  if (details.no_data) return `${ticker} fails. Yahoo Finance has no figures for it.`
-  if (details.is_fund) return fundHeadline(ticker, verdict)
-  if (details.excluded_group !== null) {
-    return `${ticker} fails. ${groupWords(details.excluded_group)} is excluded.`
+  if (details.no_data || !standard.passes) {
+    // several figures read better as a count than as a reason after a full stop
+    const stopped = stoppedChecks(verdict, standard).length
+    if (stopped > 1) return `${ticker} fails on ${figureCount(stopped)}.`
+    return `${ticker} fails. ${failReason(verdict, standard)}.`
   }
-  if (!standard.passes) return failHeadline(ticker, verdict, standard)
+  if (details.is_fund) {
+    if (details.approved_fund) return `${ticker} passes as an approved fund.`
+    return `${ticker} passes, but the fund needs checking by hand.`
+  }
 
   const figures = standard.checks.filter((c) => c.outcome === 'doubt').length
   const business = details.business_status === 'doubtful'
@@ -116,30 +120,37 @@ function businessText(verdict: ComparisonOut): string {
   return reason.charAt(0).toUpperCase() + reason.slice(1)
 }
 
-function fundHeadline(ticker: string, verdict: ComparisonOut): string {
+/** The main reason a stock fails under a standard, e.g. "Conventional banking is excluded". */
+export function failReason(verdict: ComparisonOut, standard: StandardOut): string {
   const { details } = verdict
-  if (details.approved_fund) return `${ticker} passes as an approved fund.`
-  if (details.business_status === 'excluded') {
-    return `${ticker} fails. It's on your always-exclude list.`
+  if (details.no_data) return 'Yahoo Finance has no figures for it'
+  if (details.is_fund) {
+    return details.business_status === 'excluded'
+      ? "It's on your always-exclude list"
+      : "It isn't on your approved list of funds"
   }
-  if (verdict.passes) return `${ticker} passes, but the fund needs checking by hand.`
-  return `${ticker} fails. It isn't on your approved list of funds.`
-}
-
-function failHeadline(ticker: string, verdict: ComparisonOut, standard: StandardOut): string {
-  const stopped = standard.checks.filter((c) => c.outcome === 'fail')
+  if (details.excluded_group !== null) return `${groupWords(details.excluded_group)} is excluded`
+  const stopped = stoppedChecks(verdict, standard)
+  if (stopped.length > 1) {
+    const count = figureCount(stopped.length)
+    return `${count.charAt(0).toUpperCase()}${count.slice(1)} stopped it`
+  }
   if (stopped.length === 1) {
     const [check] = stopped
     const name = ratioName(check.name)
-    if (check.value === null) return `${ticker} fails. There's no figure for ${name.toLowerCase()}.`
-    return `${ticker} fails. ${name} is over the limit.`
+    if (check.value === null) return `There's no figure for ${name.toLowerCase()}`
+    return `${name} is over the limit`
   }
-  if (stopped.length > 1) return `${ticker} fails on ${figureCount(stopped.length)}.`
-  if (verdict.details.business_status === 'excluded') {
-    return `${ticker} fails. Its business didn't get through.`
-  }
+  if (details.business_status === 'excluded') return "Its business didn't get through"
   // nothing failed outright, so strict mode turned a check into a fail
-  return `${ticker} fails. Strict mode only lets fully compliant stocks through.`
+  return 'Strict mode only lets fully compliant stocks through'
+}
+
+function stoppedChecks(verdict: ComparisonOut, standard: StandardOut) {
+  const { details } = verdict
+  // these fail on the business or the data, whatever the ratios say
+  if (details.no_data || details.is_fund || details.excluded_group !== null) return []
+  return standard.checks.filter((c) => c.outcome === 'fail')
 }
 
 function figureCount(count: number): string {

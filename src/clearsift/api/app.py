@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
@@ -26,7 +27,7 @@ from clearsift.api.schemas import (
     prices_out,
     verdict_out,
 )
-from clearsift.config import ConfigError, ScreeningConfig
+from clearsift.config import ConfigError, Methodology, ScreeningConfig
 from clearsift.dashboard_data import load_screening_config, parse_tickers
 from clearsift.data.cache import get_financials
 from clearsift.data.models import CompanyFinancials
@@ -47,6 +48,11 @@ logger = logging.getLogger(__name__)
 _TICKER = re.compile(r"\^?[A-Z0-9][A-Z0-9.\-=]{0,19}")
 
 GENERIC_ERROR = "something went wrong"
+# shown on one ticker's row when screening it crashed, the details go in the server log
+TICKER_ERROR = "couldn't screen this one, check the terminal running clearsift serve"
+
+# each ticker can mean a trip to yfinance, so keep one request from taking forever
+MAX_TICKERS = 20
 
 # this talks to your Trading 212 account, so only this machine can reach it
 HOST = "127.0.0.1"
@@ -63,14 +69,19 @@ def clean_ticker(text: str) -> str | None:
 
 def pick_standard(config: ScreeningConfig, standard: str | None) -> str:
     """Return the label of the asked-for standard, or the config's own if none was asked for."""
+    return pick_methodology(config, standard).label
+
+
+def pick_methodology(config: ScreeningConfig, standard: str | None) -> Methodology:
+    """Return the asked-for standard, or the config's own if none was asked for."""
     if standard is None:
-        return config.methodology.label
+        return config.methodology
     by_name = {m.name.lower(): m for m in config.methodologies}
     method = by_name.get(standard.strip().lower())
     if method is None:
         # the names come from config.yaml, so listing them gives nothing away
         raise HTTPException(422, f"standard must be one of: {', '.join(by_name)}")
-    return method.label
+    return method
 
 
 def create_app(
@@ -108,11 +119,18 @@ def create_app(
         return HealthOut()
 
     @app.get("/api/screen")
-    def screen(tickers: str, compare: bool = False, refresh: bool = False) -> ScreenOut:
+    def screen(
+        tickers: str, compare: bool = False, refresh: bool = False, standard: str | None = None
+    ) -> ScreenOut:
         names = parse_tickers(tickers)
         if not names:
             raise HTTPException(400, "give at least one ticker")
+        if len(names) > MAX_TICKERS:
+            raise HTTPException(422, f"give at most {MAX_TICKERS} tickers, got {len(names)}")
         config = load()
+        method = pick_methodology(config, standard)
+        # the verdicts follow whichever standard was asked for, not just the one in config
+        config = replace(config, methodology=method)
         fetch = getter(refresh)
         results: list[ScreenResult] = []
         for name in names:
@@ -123,12 +141,16 @@ def create_app(
             try:
                 if compare:
                     verdicts = compare_stock(ticker, config, get=fetch)
-                    results.append(comparison_out(verdicts, config.methodology.label))
+                    results.append(comparison_out(verdicts, method.label))
                 else:
                     results.append(verdict_out(screen_stock(ticker, config, get=fetch)))
             except ValueError as exc:
                 # one bad ticker shouldn't stop the others from showing
                 results.append(TickerError(ticker=ticker, message=str(exc)))
+            except Exception:
+                # same for a crash, but its text could hold anything, so it stays in the log
+                logger.exception("couldn't screen %s", ticker)
+                results.append(TickerError(ticker=ticker, message=TICKER_ERROR))
         return ScreenOut(results=results)
 
     @app.get("/api/stocks/{ticker}")

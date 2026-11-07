@@ -32,7 +32,8 @@ export function useApi<T>(key: string, load: (signal: AbortSignal) => Promise<T>
   return settled.result
 }
 
-function asApiError(error: unknown): ApiError {
+/** Turn anything thrown while loading into an ApiError with a next step. */
+export function asApiError(error: unknown): ApiError {
   if (error instanceof ApiError) return error
   // anything else is a bug on this side, but it still needs a way forward
   return new ApiError("Couldn't load this page", `Reload the page. ${START_HINT} if it isn't running.`)

@@ -2,6 +2,7 @@ import { type ReactNode, Suspense, lazy, useCallback } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { ApiError, type StockDetailOut, getStock } from '../api'
 import { ApiErrorBox } from '../components/ApiView'
+import { Block, HEADLINE } from '../components/Block'
 import { PurificationPanel } from '../components/PurificationPanel'
 import { SievePanel } from '../components/SievePanel'
 import { StandardSwitch } from '../components/StandardSwitch'
@@ -20,7 +21,6 @@ const PriceChart = lazy(() =>
 )
 
 const PANEL = 'rounded-lg border border-line bg-surface p-5 sm:p-6'
-const HEADLINE = 'text-4xl leading-[1.05] font-extrabold tracking-tight break-words sm:text-[60px]'
 
 /** One stock's result under the picked standard, with purification, prices and the others. */
 export function StockPage() {
@@ -223,8 +223,4 @@ function Columns({ children }: { children: ReactNode }) {
       {children}
     </div>
   )
-}
-
-function Block({ className }: { className: string }) {
-  return <div className={`rounded-md bg-track ${className}`} />
 }

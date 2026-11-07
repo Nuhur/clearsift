@@ -4,6 +4,7 @@ import {
   barLabel,
   baseText,
   isOffScale,
+  isOverLimit,
   limitPercent,
   outcomeWord,
   ratioName,
@@ -40,6 +41,16 @@ describe('scalePosition', () => {
   it('copes with a zero limit', () => {
     expect(scalePosition(0, 0)).toBe(0)
     expect(scalePosition(0.01, 0)).toBe(1)
+  })
+})
+
+describe('isOverLimit', () => {
+  it('is true at or past the limit', () => {
+    expect(isOverLimit(0.29, 0.3)).toBe(false)
+    expect(isOverLimit(0.3, 0.3)).toBe(true)
+    expect(isOverLimit(0.01, 0)).toBe(true)
+    expect(isOverLimit(0, 0)).toBe(false)
+    expect(isOverLimit(null, 0.3)).toBe(false)
   })
 })
 

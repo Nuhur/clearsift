@@ -64,6 +64,11 @@ export function scalePosition(value: number | null, limit: number): number | nul
   return Math.min(Math.max(value / (limit * 2), 0), 1)
 }
 
+/** Whether a value is at or past its limit, so it didn't get under. */
+export function isOverLimit(value: number | null, limit: number): boolean {
+  return value !== null && !withinLimit(value, limit)
+}
+
 /** Whether a value is past the right-hand end of the bar. */
 export function isOffScale(value: number | null, limit: number): boolean {
   if (value === null) return false

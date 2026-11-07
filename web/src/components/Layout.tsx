@@ -1,4 +1,5 @@
-import { Link, NavLink, Outlet } from 'react-router'
+import { Link, NavLink, Outlet, useLocation } from 'react-router'
+import { screenerLink } from '../lib/screener'
 import { SieveMark } from './SieveMark'
 import { StockSearch } from './StockSearch'
 import { ThemeSwitch } from './ThemeSwitch'
@@ -15,6 +16,7 @@ function navClass({ isActive }: { isActive: boolean }): string {
 
 /** The header and page frame shared by every route. */
 export function Layout() {
+  const { pathname, search } = useLocation()
   return (
     <>
       <a
@@ -38,7 +40,7 @@ export function Layout() {
                 </NavLink>
               </li>
               <li>
-                <NavLink to="/screener" className={navClass}>
+                <NavLink to={screenerLink(pathname, search)} className={navClass}>
                   Screener
                 </NavLink>
               </li>

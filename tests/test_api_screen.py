@@ -1,4 +1,5 @@
 import copy
+import logging
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,14 @@ import yaml
 from fastapi.testclient import TestClient
 
 from clearsift.api import create_app
-from clearsift.api.app import GENERIC_ERROR, clean_ticker, pick_standard
+from clearsift.api.app import (
+    GENERIC_ERROR,
+    MAX_TICKERS,
+    TICKER_ERROR,
+    clean_ticker,
+    pick_methodology,
+    pick_standard,
+)
 from clearsift.api.schemas import (
     checks_out,
     comparison_out,
@@ -379,17 +387,29 @@ def test_screen_unmapped_sector_is_a_config_error(tmp_path: Path) -> None:
     assert "crypto" in response.json()["message"]
 
 
-def test_screen_crash_gives_a_safe_message(tmp_path: Path) -> None:
+def test_screen_crash_gives_a_safe_message(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     def crash(ticker: str, **kwargs: Any) -> CompanyFinancials:
         raise RuntimeError("secret-key-123 in a traceback")
 
     client = _client(tmp_path, get=crash)
-    response = client.get("/api/screen", params={"tickers": "MSFT"})
+    with caplog.at_level(logging.ERROR, logger="clearsift.api.app"):
+        response = client.get("/api/screen", params={"tickers": "MSFT"})
 
-    assert response.status_code == 500
-    assert response.json() == {"message": GENERIC_ERROR}
+    # one ticker crashing comes back as its own row, not a broken request
+    assert response.status_code == 200
+    assert response.json() == {
+        "results": [{"kind": "error", "ticker": "MSFT", "message": TICKER_ERROR}]
+    }
     assert "secret-key-123" not in response.text
+    assert "RuntimeError" not in response.text
     assert "Traceback" not in response.text
+    # the full error goes to the server log, with the ticker it came from
+    (record,) = [r for r in caplog.records if r.name == "clearsift.api.app"]
+    assert record.getMessage() == "couldn't screen MSFT"
+    assert record.exc_info is not None
+    assert "secret-key-123" in str(record.exc_info[1])
 
 
 def test_unknown_route_uses_the_same_error_shape(client: TestClient) -> None:
@@ -664,3 +684,138 @@ def test_trusted_older_interest_income_passes_with_its_year(tmp_path: Path) -> N
     assert aaoifi["checks"][-1]["year"] == 2023
     assert verdict["purification_ratio"] == pytest.approx(0.02)
     assert verdict["purification_year"] == 2023
+
+
+# /api/screen for the screener page
+
+
+def test_screen_crash_only_hits_that_ticker(tmp_path: Path) -> None:
+    good = FakeGet(DATA)
+
+    def flaky(ticker: str, **kwargs: Any) -> CompanyFinancials:
+        if ticker == "KR":
+            raise OSError("disk on fire")
+        return good(ticker, **kwargs)
+
+    client = _client(tmp_path, get=flaky)
+    response = client.get("/api/screen", params={"tickers": "MSFT,KR,MO", "compare": "true"})
+
+    results = response.json()["results"]
+    assert [(r["ticker"], r["kind"]) for r in results] == [
+        ("MSFT", "comparison"),
+        ("KR", "error"),
+        ("MO", "comparison"),
+    ]
+    assert "disk on fire" not in response.text
+
+
+@pytest.mark.parametrize("compare", ["true", "false"])
+def test_screen_picks_a_standard(tmp_path: Path, compare: str) -> None:
+    client = _client(tmp_path)
+
+    response = client.get(
+        "/api/screen", params={"tickers": "SPLT", "standard": "FTSE", "compare": compare}
+    )
+
+    [result] = response.json()["results"]
+    assert result["methodology"] == "FTSE"
+    # SPLT passes AAOIFI on market cap but fails FTSE on total assets
+    assert result["passes"] is False
+
+
+def test_screen_defaults_to_the_config_standard(client: TestClient) -> None:
+    [result] = client.get("/api/screen", params={"tickers": "SPLT"}).json()["results"]
+
+    assert result["methodology"] == "AAOIFI"
+    assert result["passes"] is True
+
+
+def test_screen_compare_sends_every_standard_with_checks(tmp_path: Path) -> None:
+    client = _client(tmp_path, get=FakeGet(PAGE_DATA), config=FULL_CONFIG)
+
+    response = client.get(
+        "/api/screen", params={"tickers": "OLDR", "compare": "true", "standard": "msci"}
+    )
+
+    [result] = response.json()["results"]
+    assert result["methodology"] == "MSCI"
+    assert "prices" not in result
+    assert [s["methodology"] for s in result["standards"]] == ["AAOIFI", "FTSE", "MSCI"]
+    interest = result["standards"][2]["checks"][-1]
+    assert interest == {
+        "name": "interest income",
+        "value": pytest.approx(0.02),
+        "limit": 0.05,
+        "base": "revenue",
+        "outcome": "pass",
+        "year": 2023,
+    }
+
+
+def test_screen_unknown_standard(tmp_path: Path) -> None:
+    get = FakeGet(DATA)
+    client = _client(tmp_path, get=get)
+
+    response = client.get("/api/screen", params={"tickers": "MSFT", "standard": "nope"})
+
+    assert response.status_code == 422
+    assert response.json() == {"message": "standard must be one of: aaoifi, ftse"}
+    assert get.calls == []
+
+
+def test_screen_takes_up_to_the_cap(tmp_path: Path) -> None:
+    tickers = ",".join(f"T{i}" for i in range(MAX_TICKERS))
+
+    response = _client(tmp_path).get("/api/screen", params={"tickers": tickers})
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == MAX_TICKERS
+
+
+def test_screen_over_the_cap(tmp_path: Path) -> None:
+    get = FakeGet(DATA)
+    tickers = ",".join(f"T{i}" for i in range(MAX_TICKERS + 1))
+
+    response = _client(tmp_path, get=get).get("/api/screen", params={"tickers": tickers})
+
+    assert response.status_code == 422
+    assert response.json() == {"message": "give at most 20 tickers, got 21"}
+    assert get.calls == []
+
+
+def test_screen_cap_counts_tickers_after_repeats_are_dropped(client: TestClient) -> None:
+    response = client.get("/api/screen", params={"tickers": ",".join(["MSFT"] * 30)})
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 1
+
+
+def test_screen_refresh_defaults_to_the_cache(tmp_path: Path) -> None:
+    get = FakeGet(DATA)
+
+    _client(tmp_path, get=get).get("/api/screen", params={"tickers": "MSFT"})
+
+    assert "refresh" not in get.calls[0][1]
+
+
+def test_screen_is_get_only(client: TestClient) -> None:
+    assert client.post("/api/screen", params={"tickers": "MSFT"}).status_code == 405
+
+
+def test_pick_methodology(tmp_path: Path) -> None:
+    config = load_config(_write(tmp_path, FULL_CONFIG)).screening
+
+    assert pick_methodology(config, None).name == "aaoifi"
+    assert pick_methodology(config, " Ftse ").max_debt == 0.33333
+
+
+def test_stock_detail_crash_still_gives_the_generic_message(tmp_path: Path) -> None:
+    def crash(ticker: str, **kwargs: Any) -> CompanyFinancials:
+        raise RuntimeError("secret-key-123 in a traceback")
+
+    response = _client(tmp_path, get=crash).get("/api/stocks/MSFT")
+
+    # one stock on its own has nothing else to show, so the whole page gets the safe message
+    assert response.status_code == 500
+    assert response.json() == {"message": GENERIC_ERROR}
+    assert "secret-key-123" not in response.text

@@ -167,6 +167,8 @@ type Params = Record<string, string | boolean | undefined>
 export interface ScreenOptions {
   compare?: boolean
   refresh?: boolean
+  // aaoifi, ftse or msci. Left out, the API uses the one in config.yaml
+  standard?: string
 }
 
 export interface PortfolioOptions {
@@ -188,7 +190,12 @@ export function getScreen(
 ): Promise<ScreenOut> {
   return get(
     '/api/screen',
-    { tickers: tickers.join(','), compare: options.compare, refresh: options.refresh },
+    {
+      tickers: tickers.join(','),
+      compare: options.compare,
+      refresh: options.refresh,
+      standard: options.standard,
+    },
     signal,
   )
 }

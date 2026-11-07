@@ -1,28 +1,22 @@
-import { type ReactNode, useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { ComparisonOut, RatioCheckOut, StandardOut } from '../api'
 import { businessRow, checkByHandNotes } from '../lib/headline'
 import {
   type OutcomeWord,
-  barLabel,
   isOffScale,
   outcomeWord,
   ratioName,
   ratioSubline,
   reportYearText,
-  scalePosition,
   valuePercent,
 } from '../lib/ratios'
+import { type SlidePhase, useSlideIn } from '../useSlideIn'
+import { RatioBar } from './RatioBar'
 
 const CIRCLES: Record<OutcomeWord, { mark: string; style: string }> = {
   Through: { mark: '✓', style: 'border-pass bg-passbg text-pass' },
   Check: { mark: '?', style: 'border-warn bg-warnbg text-warntext' },
   Stopped: { mark: '✕', style: 'border-fail bg-failbg text-fail' },
-}
-
-const DOTS: Record<OutcomeWord, string> = {
-  Through: 'bg-pass',
-  Check: 'bg-warn',
-  Stopped: 'bg-fail',
 }
 
 const WORDS: Record<OutcomeWord, string> = {
@@ -43,7 +37,7 @@ export function SievePanel({
 }) {
   const business = businessRow(verdict)
   const notes = checkByHandNotes(verdict, standard)
-  const settled = useSettled()
+  const phase = useSlideIn(standard.methodology)
   return (
     <section
       className="rounded-lg border border-line bg-surface p-5 sm:p-6"
@@ -65,7 +59,7 @@ export function SievePanel({
           <Word word={business.word} />
         </Row>
         {standard.checks.map((check) => (
-          <RatioRow key={check.name} check={check} settled={settled} />
+          <RatioRow key={check.name} check={check} phase={phase} />
         ))}
       </ol>
       {notes.length > 0 && (
@@ -81,9 +75,8 @@ export function SievePanel({
   )
 }
 
-function RatioRow({ check, settled }: { check: RatioCheckOut; settled: boolean }) {
+function RatioRow({ check, phase }: { check: RatioCheckOut; phase: SlidePhase }) {
   const word = outcomeWord(check.outcome)
-  const position = scalePosition(check.value, check.limit)
   const offScale = isOffScale(check.value, check.limit)
   // an older figure still counts, the row just says how old it is
   const year = reportYearText(check)
@@ -95,22 +88,7 @@ function RatioRow({ check, settled }: { check: RatioCheckOut; settled: boolean }
       </div>
       {/* on phones the bar drops under the name and value, so it gets the full width */}
       <div className="order-last col-span-2 self-center sm:order-none sm:col-span-1">
-        {position === null ? (
-          <p className="text-sm font-medium text-muted">No figure</p>
-        ) : (
-          <div role="img" aria-label={barLabel(check)} className="relative h-6">
-            {/* the left half is under the limit, the right half over it */}
-            <div className="absolute inset-x-0 top-2 flex h-2 overflow-hidden rounded-full">
-              <div className="w-1/2 bg-passbg" />
-              <div className="w-1/2 bg-failbg" />
-            </div>
-            <div className="absolute top-0 left-1/2 h-6 w-0.5 -translate-x-1/2 bg-ink" />
-            <div
-              className={`absolute top-1.5 size-3 -translate-x-1/2 rounded-full ring-2 ring-surface motion-safe:transition-[left] motion-safe:duration-600 motion-safe:ease-out ${DOTS[word]}`}
-              style={{ left: `${(settled ? position : 0) * 100}%` }}
-            />
-          </div>
-        )}
+        <RatioBar check={check} phase={phase} />
       </div>
       <div className="text-right">
         {check.value !== null && (
@@ -144,21 +122,4 @@ function Row({ word, children }: { word: OutcomeWord; children: ReactNode }) {
 
 function Word({ word }: { word: OutcomeWord }) {
   return <p className={`text-right text-sm font-bold ${WORDS[word]}`}>{word}</p>
-}
-
-/** False for the first frame, then true, so the dots slide in once when a result arrives. */
-function useSettled(): boolean {
-  // with less motion asked for, the dots just start where they belong
-  const [settled, setSettled] = useState(
-    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-  )
-  useEffect(() => {
-    if (settled) return
-    // two frames, so the browser has drawn the dots at 0 before they move
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => setSettled(true))
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [settled])
-  return settled
 }
