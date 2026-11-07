@@ -39,7 +39,9 @@ def fetch_financials(ticker: str) -> CompanyFinancials:
     except Exception:
         pass
 
-    kwargs: dict[str, object] = {attr: _number(info.get(key)) for attr, key in _FIELD_MAP.items()}
+    kwargs: dict[str, object] = {
+        attr: clean_number(info.get(key)) for attr, key in _FIELD_MAP.items()
+    }
 
     # sector and industry are text, so the line above wrongly set them to None
     kwargs["sector"] = info.get("sector") or None
@@ -55,7 +57,8 @@ def fetch_financials(ticker: str) -> CompanyFinancials:
     return CompanyFinancials(ticker=ticker, **kwargs)  # type: ignore[arg-type]
 
 
-def _number(raw: Any) -> float | None:
+def clean_number(raw: Any) -> float | None:
+    """Turn a yfinance value into a float, or None if it isn't a real number."""
     # yfinance sometimes gives NaN or inf instead of nothing, so treat it as missing.
     # Python counts True and False as numbers, so skip those too
     if isinstance(raw, bool) or not isinstance(raw, numbers.Real):
@@ -88,7 +91,7 @@ def _interest_income(yf_ticker: Any) -> dict[str, Any]:
     for column, year in zip(columns, years, strict=True):
         year_data = statement[column]
         income = _first_non_negative(year_data, _INTEREST_INCOME_ROWS)
-        revenue = _number(year_data.get("Total Revenue"))
+        revenue = clean_number(year_data.get("Total Revenue"))
         if income is not None and revenue is not None:
             result.update(
                 interest_income=income, interest_income_revenue=revenue, interest_income_year=year
@@ -141,7 +144,7 @@ def _balance_sheet_debt(year_data: Any) -> float | None:
 
 def _first_non_negative(year_data: Any, rows: tuple[str, ...]) -> float | None:
     for row in rows:
-        value = _number(year_data.get(row))
+        value = clean_number(year_data.get(row))
         # none of these can be negative, so a negative number is bad data
         if value is not None and value >= 0:
             return value

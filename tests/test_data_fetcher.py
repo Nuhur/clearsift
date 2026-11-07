@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pandas as pd
 import pytest
 
-from clearsift.data.fetcher import fetch_financials
+from clearsift.data.fetcher import clean_number, fetch_financials
 from clearsift.data.models import CompanyFinancials
 
 FULL_INFO = {
@@ -407,3 +407,20 @@ def test_debt_parts_from_older_year_are_not_mixed_in() -> None:
     )
 
     assert _fetch_with_balance_sheet(sheet).balance_sheet_debt is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (3, 3.0),
+        (2.5, 2.5),
+        (-1.0, -1.0),
+        (float("nan"), None),
+        (float("inf"), None),
+        (True, None),
+        ("12", None),
+        (None, None),
+    ],
+)
+def test_clean_number(raw: object, expected: float | None) -> None:
+    assert clean_number(raw) == expected
