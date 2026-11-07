@@ -45,9 +45,12 @@ def main(
         command.add_argument(
             "--refresh", action="store_true", help="ignore the cache and fetch fresh data"
         )
+    serve = commands.add_parser("serve", help="start the web API on http://127.0.0.1:8000")
+    serve.add_argument("--config", default="config.yaml", help="path to config.yaml")
     args = parser.parse_args(argv)
 
-    if args.refresh:
+    # serve has no --refresh, the web app asks for it per request instead
+    if getattr(args, "refresh", False):
         get = partial(get, refresh=True)
 
     try:
@@ -62,9 +65,26 @@ def main(
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    if args.command == "serve":
+        return _run_serve(args.config, get, make_client)
     if args.command == "portfolio":
         return _run_portfolio(config.screening, args.compare, get, make_client)
     return _run_screen(args.tickers, config.screening, args.compare, get)
+
+
+def _run_serve(
+    config_path: str,
+    get: Callable[..., CompanyFinancials],
+    make_client: Callable[[], PositionSource],
+) -> int:
+    # the API is an optional install, so the rest of the CLI has to work without it
+    try:
+        from clearsift.api.app import serve
+    except ImportError:
+        print('error: the web API isn\'t installed, run: pip install -e ".[api]"', file=sys.stderr)
+        return 2
+    serve(config_path, get=get, make_client=make_client)
+    return 0
 
 
 def _run_screen(

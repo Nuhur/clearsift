@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from clearsift.dashboard_data import Colour, comparison_card, stock_card
 from clearsift.data.prices import PricePoint
+from clearsift.portfolio import NOT_CONVERTED, Holding
 from clearsift.screening.business import RatioValue, Status
 from clearsift.screening.screen import StockVerdict
 
@@ -88,6 +89,31 @@ class StockDetailOut(BaseModel):
     prices: list[PricePointOut]
 
 
+class HoldingValuesOut(BaseModel):
+    quantity: float | None
+    average_price: float | None
+    current_price: float | None
+    # prices are in the instrument's currency, not the account's
+    currency: str | None
+
+
+class HoldingOut(BaseModel):
+    t212_ticker: str
+    yahoo_ticker: str | None
+    title: str
+    # None when the ticker couldn't be converted, so it was never screened
+    verdict: VerdictOut | ComparisonOut | None
+    message: str | None
+    # left out unless asked for, so a screenshot of the page doesn't give the amounts away
+    values: HoldingValuesOut | None
+
+
+class PortfolioOut(BaseModel):
+    holdings: list[HoldingOut]
+    summary: str
+    review: list[str]
+
+
 class HealthOut(BaseModel):
     status: Literal["ok"] = "ok"
 
@@ -155,3 +181,31 @@ def comparison_out(verdicts: list[StockVerdict], chosen: str) -> ComparisonOut:
 def prices_out(points: Sequence[PricePoint]) -> list[PricePointOut]:
     """Turn closing prices into their response models."""
     return [PricePointOut(date=p.day, close=p.close) for p in points]
+
+
+def holding_out(holding: Holding, compare: bool, show_values: bool) -> HoldingOut:
+    """Turn one holding into its response model."""
+    verdict: VerdictOut | ComparisonOut | None = None
+    if holding.verdict is not None:
+        # the holding's own verdict is the standard picked in config.yaml
+        if compare:
+            verdict = comparison_out(holding.verdicts, holding.verdict.methodology)
+        else:
+            verdict = verdict_out(holding.verdict)
+    position = holding.position
+    values = None
+    if show_values:
+        values = HoldingValuesOut(
+            quantity=position.quantity,
+            average_price=position.average_price,
+            current_price=position.current_price,
+            currency=position.currency,
+        )
+    return HoldingOut(
+        t212_ticker=holding.label,
+        yahoo_ticker=holding.yahoo,
+        title=holding.title,
+        verdict=verdict,
+        message=NOT_CONVERTED if verdict is None else None,
+        values=values,
+    )

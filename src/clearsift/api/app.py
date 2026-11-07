@@ -6,19 +6,23 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from clearsift.api.schemas import (
     ComparisonOut,
     HealthOut,
+    PortfolioOut,
     ScreenOut,
     ScreenResult,
     StockDetailOut,
     TickerError,
     comparison_out,
+    holding_out,
     prices_out,
     verdict_out,
 )
@@ -27,9 +31,15 @@ from clearsift.dashboard_data import load_screening_config, parse_tickers
 from clearsift.data.cache import get_financials
 from clearsift.data.models import CompanyFinancials
 from clearsift.data.prices import PricePoint, get_closes
-from clearsift.portfolio import PositionSource
+from clearsift.portfolio import (
+    PositionSource,
+    fetch_positions,
+    portfolio_summary,
+    review_lines,
+    screen_holdings,
+)
 from clearsift.screening.screen import compare_stock, screen_stock
-from clearsift.t212.client import T212Client
+from clearsift.t212.client import T212Client, T212ConfigError, T212Error
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +47,12 @@ logger = logging.getLogger(__name__)
 _TICKER = re.compile(r"\^?[A-Z0-9][A-Z0-9.\-=]{0,19}")
 
 GENERIC_ERROR = "something went wrong"
+
+# this talks to your Trading 212 account, so only this machine can reach it
+HOST = "127.0.0.1"
+PORT = 8000
+# where the React app runs in development, nothing else gets to call the API
+ALLOWED_ORIGINS = ("http://localhost:5173",)
 
 
 def clean_ticker(text: str) -> str | None:
@@ -52,9 +68,20 @@ def create_app(
     get_prices: Callable[..., list[PricePoint]] = get_closes,
 ) -> FastAPI:
     """Build the clearsift API, with the data sources passed in so tests can fake them."""
-    app = FastAPI(title="clearsift", docs_url="/api/docs", openapi_url="/api/openapi.json")
-    # the portfolio routes need this, kept on the app so they can share it
-    app.state.make_client = make_client
+    app = FastAPI(
+        title="clearsift",
+        docs_url="/api/docs",
+        openapi_url="/api/openapi.json",
+        redoc_url=None,
+        swagger_ui_oauth2_redirect_url=None,
+    )
+    # nothing here changes anything, so the browser only ever needs GET
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(ALLOWED_ORIGINS),
+        allow_methods=["GET"],
+        allow_credentials=False,
+    )
     _add_error_handlers(app)
 
     def load() -> ScreeningConfig:
@@ -111,7 +138,41 @@ def create_app(
             prices = []
         return StockDetailOut(ticker=cleaned, verdict=verdict, prices=prices_out(prices))
 
+    @app.get("/api/portfolio")
+    def portfolio(
+        compare: bool = False, refresh: bool = False, show_values: bool = False
+    ) -> PortfolioOut:
+        config = load()
+        try:
+            positions = fetch_positions(make_client)
+        except T212ConfigError as exc:
+            # these messages only name what's missing, never what the key or secret hold
+            raise HTTPException(500, f"Trading 212 error: {exc}") from exc
+        except T212Error as exc:
+            # these never hold the key, secret or response body, just the status and path
+            raise HTTPException(502, f"Trading 212 error: {exc}") from exc
+        try:
+            holdings = screen_holdings(positions, config, compare, getter(refresh))
+        except ValueError as exc:
+            raise HTTPException(500, f"screening error: {exc}") from exc
+        return PortfolioOut(
+            holdings=[holding_out(h, compare, show_values) for h in holdings],
+            summary=portfolio_summary(holdings),
+            review=review_lines(holdings),
+        )
+
     return app
+
+
+def serve(
+    config_path: str | Path = "config.yaml",
+    *,
+    get: Callable[..., CompanyFinancials] = get_financials,
+    make_client: Callable[[], PositionSource] = T212Client.from_env,
+    run: Callable[..., None] = uvicorn.run,
+) -> None:
+    """Start the API on this machine only, at http://127.0.0.1:8000."""
+    run(create_app(config_path, get=get, make_client=make_client), host=HOST, port=PORT)
 
 
 def _add_error_handlers(app: FastAPI) -> None:

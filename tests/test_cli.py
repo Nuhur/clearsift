@@ -1,4 +1,5 @@
 import copy
+import sys
 from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
@@ -715,3 +716,66 @@ def test_standards_summary(three_standards: Path) -> None:
     verdicts = compare_stock("ABC", config, get=get)
 
     assert standards_summary(verdicts) == "passes under 2 of 3 standards"
+
+
+# serve
+
+
+def _never_get(ticker: str, **kwargs: Any) -> CompanyFinancials:
+    raise AssertionError("serve shouldn't fetch anything when it starts")
+
+
+def _never_client() -> Any:
+    raise AssertionError("serve shouldn't talk to Trading 212 when it starts")
+
+
+def test_serve_starts_the_api(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import clearsift.api.app as api_app
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_serve(path: str, **kwargs: Any) -> None:
+        calls.append((path, kwargs))
+
+    monkeypatch.setattr(api_app, "serve", fake_serve)
+
+    code = main(
+        ["serve", "--config", str(config_path)], get=_never_get, make_client=_never_client
+    )
+
+    assert code == 0
+    assert calls == [(str(config_path), {"get": _never_get, "make_client": _never_client})]
+
+
+def test_serve_checks_the_config_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import clearsift.api.app as api_app
+
+    def fake_serve(path: str, **kwargs: Any) -> None:
+        raise AssertionError("a broken config shouldn't start the server")
+
+    monkeypatch.setattr(api_app, "serve", fake_serve)
+    data = copy.deepcopy(CONFIG)
+    data["screening"]["mode"] = "relaxed"
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    assert main(["serve", "--config", str(path)]) == 2
+    assert "config error" in capsys.readouterr().err
+
+
+def test_serve_without_the_api_installed(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # None in sys.modules makes the import fail, like it would without the extras
+    monkeypatch.setitem(sys.modules, "clearsift.api.app", None)
+
+    assert main(["serve", "--config", str(config_path)]) == 2
+    assert 'pip install -e ".[api]"' in capsys.readouterr().err
+
+
+def test_serve_has_no_host_option() -> None:
+    # it only ever listens on this machine, so there's no flag to change that
+    with pytest.raises(SystemExit):
+        main(["serve", "--host", "0.0.0.0"])
