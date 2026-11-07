@@ -222,3 +222,7 @@ __marimo__/
 # Clearsift
 /data/
 *.db
+
+# Web front end
+web/node_modules/
+web/dist/

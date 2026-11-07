@@ -227,6 +227,34 @@ Percentages and amounts always round up, so you never give less than you should.
 - **Undisclosed interest income:** some companies don't report it. Those stocks are doubtful and need checking by hand.
 - **Not advice:** Clearsift is not financial advice or a religious ruling. Check important decisions with a qualified scholar or adviser.
 
+## Running the web app
+
+The web app is still being built. For now it has placeholder pages that show the API working. You need Node.js 22.12 or newer (or 20.19+) as well as Python.
+
+Install the API extras once:
+
+```
+pip install -e ".[api]"
+```
+
+In one terminal, start the API. It only listens on this machine:
+
+```
+clearsift serve
+```
+
+In another terminal, start the front end:
+
+```
+cd web
+npm install
+npm run dev
+```
+
+Then open http://localhost:5173. The front end passes every `/api` request on to `clearsift serve`, so keep both running.
+
+The web app only reads data, it can't place or change anything. Holdings are shown without prices or quantities.
+
 ## Running the tests
 
 ```

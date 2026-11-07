@@ -1,0 +1,103 @@
+@import 'tailwindcss';
+
+:root {
+  --paper: #f2f4f1;
+  --surface: #ffffff;
+  --ink: #0e2a2f;
+  --body: #3d5054;
+  --muted: #55666a;
+  --line: #d8deda;
+  --line2: #e6ebe7;
+  --line3: #c9d1cc;
+  --track: #e2e7e3;
+  --pass: #1d7a4c;
+  --passbg: #e3f1e8;
+  --warn: #9a5b00;
+  --warnbg: #f6e7c8;
+  --warntext: #5c3700;
+  --fail: #b3261e;
+  --failbg: #f4e9e7;
+  --lapis: #2747a6;
+  --action: #2747a6;
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --paper: #0d1c1f;
+  --surface: #14282b;
+  --ink: #e4ece8;
+  --body: #b5c4c0;
+  --muted: #8fa3a0;
+  --line: #24393c;
+  --line2: #1d3134;
+  --line3: #36504f;
+  --track: #20373a;
+  --pass: #4cc38a;
+  --passbg: #163a2b;
+  --warn: #e3a64c;
+  --warnbg: #3a2b12;
+  --warntext: #f2d49a;
+  --fail: #f07a70;
+  --failbg: #3b2220;
+  --lapis: #93a9f5;
+  --action: #3e5fcc;
+  color-scheme: dark;
+}
+
+/* inline so the utilities point at the variables above and follow the theme switch */
+@theme inline {
+  /* drop Tailwind's own palette, so nothing can use a colour outside the tokens */
+  --color-*: initial;
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-body: var(--body);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line2: var(--line2);
+  --color-line3: var(--line3);
+  --color-track: var(--track);
+  --color-pass: var(--pass);
+  --color-passbg: var(--passbg);
+  --color-warn: var(--warn);
+  --color-warnbg: var(--warnbg);
+  --color-warntext: var(--warntext);
+  --color-fail: var(--fail);
+  --color-failbg: var(--failbg);
+  --color-lapis: var(--lapis);
+  --color-action: var(--action);
+  --color-white: #ffffff;
+
+  --font-sans: 'Schibsted Grotesk', system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    background-color: var(--paper);
+    color: var(--body);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  h1,
+  h2,
+  h3 {
+    color: var(--ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--lapis);
+    outline-offset: 2px;
+  }
+
+  /* people who've asked for less motion get the new colours straight away */
+  @media (prefers-reduced-motion: no-preference) {
+    *,
+    *::before,
+    *::after {
+      transition-property: color, background-color, border-color, fill, stroke;
+      transition-duration: 0.3s;
+    }
+  }
+}
